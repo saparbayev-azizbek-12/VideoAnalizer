@@ -1,0 +1,9 @@
+.venv/
+
+__pycache__
+.vscode/
+.idea/
+*.pyc
+*.ipynb
+.env
+uv.lock
