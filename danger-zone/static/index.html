@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UzGidroEnergo - Danger Zone Monitoring</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header & Server Connection -->
+        <header class="app-header">
+            <div class="brand">
+                <div class="logo-icon">⚠️</div>
+                <div>
+                    <h1>Xavfli Hudud Monitoring Tizimi</h1>
+                    <p class="subtitle">Superkompyuter AI va Ob'ektlarni Aniqlash Platformasi</p>
+                </div>
+            </div>
+            
+            <div class="server-config">
+                <div class="input-group">
+                    <label for="serverUrl">Superkompyuter IP / URL:</label>
+                    <input type="text" id="serverUrl" value="http://localhost:8000" placeholder="http://192.168.1.100:8000">
+                </div>
+                <button id="checkConnBtn" class="btn btn-secondary">Ulanishni tekshirish</button>
+                <div id="gpuStatus" class="status-badge offline">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Serverga ulanmagan</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Layout -->
+        <main class="dashboard-grid">
+            
+            <!-- Left Panel: Control & Zone Configuration -->
+            <section class="card config-card">
+                <h2>1. Video yuklash va kadr tanlash</h2>
+                <div class="upload-box" id="uploadBox">
+                    <input type="file" id="videoFileInput" accept="video/mp4,video/avi,video/mov,video/mkv" hidden>
+                    <div class="upload-icon">📁</div>
+                    <p>Videoni shu yerga tashlang yoki <strong>fayl tanlang</strong></p>
+                    <span class="upload-hint">MP4, AVI, MOV, MKV formatlar</span>
+                </div>
+
+                <div id="videoMeta" class="video-meta-box hidden">
+                    <div class="meta-item"><span>Fayl:</span> <strong id="metaFilename">-</strong></div>
+                    <div class="meta-item"><span>O'lcham:</span> <strong id="metaResolution">-</strong></div>
+                    <div class="meta-item"><span>Vaqt:</span> <strong id="metaDuration">-</strong></div>
+                    <div class="meta-item"><span>Kadrlar:</span> <strong id="metaFrames">-</strong></div>
+                </div>
+
+                <div id="frameSeekerSection" class="seeker-section hidden">
+                    <label for="frameSlider">Kadrni tanlash (Xavfli hudud chizish uchun):</label>
+                    <div class="slider-controls">
+                        <button id="btnPrevFrame" class="btn btn-icon">-5s</button>
+                        <input type="range" id="frameSlider" min="0" max="100" value="0">
+                        <button id="btnNextFrame" class="btn btn-icon">+5s</button>
+                    </div>
+                    <div class="frame-indicator">
+                        Tanlangan kadr: <span id="currentFrameLabel">0</span> / <span id="maxFrameLabel">0</span>
+                    </div>
+                </div>
+
+                <hr class="divider">
+
+                <h2>2. Sun'iy Intelekt Sozlamalari</h2>
+                <div class="form-group">
+                    <label for="modelSelect">YOLO AI Modeli:</label>
+                    <select id="modelSelect" class="form-control">
+                        <option value="yolov8l.pt" selected>YOLOv8 Large (yolov8l.pt) - Yuqori Aniqlik (Superkompyuter)</option>
+                        <option value="yolo11n.pt">YOLO11 Nano (yolo11n.pt) - Tezkor Ishlov</option>
+                        <option value="yolov8m.pt">YOLOv8 Medium (yolov8m.pt) - O'rtacha</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="confRange">Aniqlash Ishonchlilik Chegarasi (Conf): <strong id="confVal">0.35</strong></label>
+                    <input type="range" id="confRange" min="0.10" max="0.95" step="0.05" value="0.35">
+                </div>
+
+                <button id="startProcessBtn" class="btn btn-primary btn-block" disabled>
+                    ⚡ Superkompyuterda Qayta Ishlashni Boshlash
+                </button>
+            </section>
+
+            <!-- Right Panel: Canvas Zone Selection & Monitoring -->
+            <section class="card display-card">
+                <div class="display-header">
+                    <h2>3. Xavfli Hudud (Poligon) Belgilash Canvas</h2>
+                    <div class="canvas-actions">
+                        <button id="btnUndoPoint" class="btn btn-small btn-warning">↩ Orqaga (z)</button>
+                        <button id="btnClearPoints" class="btn btn-small btn-danger">🗑️ Tozalash (r)</button>
+                    </div>
+                </div>
+
+                <div class="canvas-wrapper" id="canvasWrapper">
+                    <canvas id="zoneCanvas"></canvas>
+                    <div id="canvasPlaceholder" class="placeholder-overlay">
+                        <span>Videoni yuklang va kadrni tanlang</span>
+                    </div>
+                </div>
+
+                <div class="points-info">
+                    <strong>Belgilangan nuqtalar (<span id="pointCount">0</span>/min 3):</strong>
+                    <div id="pointsList" class="points-chips">Hech qanday nuqta belgilanmadi</div>
+                </div>
+
+                <!-- Process Monitoring Section -->
+                <div id="monitoringSection" class="monitoring-box hidden">
+                    <hr class="divider">
+                    <div class="monitoring-header">
+                        <h2>4. Real-Vaqt Monitoring Dashboard</h2>
+                        <div id="alertBanner" class="alert-banner hidden">
+                            🚨 DIQQAT! XAVFLI HUDUDDA ODAM ANIQALANDI!
+                        </div>
+                    </div>
+
+                    <div class="progress-bar-container">
+                        <div class="progress-bar-fill" id="progressBarFill" style="width: 0%;"></div>
+                        <span class="progress-text" id="progressText">0%</span>
+                    </div>
+
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <span class="stat-label">Holat</span>
+                            <span class="stat-value" id="statStatus">Jarayonda...</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Kadrlar</span>
+                            <span class="stat-value" id="statFrames">0 / 0</span>
+                        </div>
+                        <div class="stat-card warning">
+                            <span class="stat-label">Buzilish Kadrlar</span>
+                            <span class="stat-value" id="statBreaches">0</span>
+                        </div>
+                        <div class="stat-card danger">
+                            <span class="stat-label">Hududdagi Odamlar</span>
+                            <span class="stat-value" id="statPeopleInZone">0</span>
+                        </div>
+                    </div>
+
+                    <div id="resultActions" class="result-actions hidden">
+                        <a id="downloadVideoBtn" href="#" class="btn btn-success" target="_blank">📥 Natijaviy Videoni Yuklab Olish (.mp4)</a>
+                        <a id="downloadCsvBtn" href="#" class="btn btn-secondary" target="_blank">📊 CSV Log Hisobotini Yuklab Olish (.csv)</a>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
