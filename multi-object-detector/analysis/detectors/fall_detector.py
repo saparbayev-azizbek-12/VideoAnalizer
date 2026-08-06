@@ -10,10 +10,25 @@ import numpy as np
 from ultralytics import YOLO
 import mediapipe as mp
 
+import os
+from pathlib import Path
+import config
+
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 
 _YOLO_MODEL: Optional[YOLO] = None
+BASE_DIR = Path(__file__).resolve().parent.parent
+LOCAL_MODEL_PATH = str(BASE_DIR / "models" / "yolov8l.pt")
+
+def _get_person_model_path(custom_path: Optional[str] = None) -> str:
+    if custom_path and os.path.exists(custom_path):
+        return custom_path
+    if hasattr(config, "PERSON_MODEL_PATH") and os.path.exists(config.PERSON_MODEL_PATH):
+        return config.PERSON_MODEL_PATH
+    if os.path.exists(LOCAL_MODEL_PATH):
+        return LOCAL_MODEL_PATH
+    return "yolov8l.pt"
 
 STANDING_ANGLE_DEG = 10.0
 LYING_ANGLE_DEG = 60.0
@@ -70,7 +85,7 @@ def is_pose_reliable(landmarks) -> bool:
 def get_model() -> YOLO:
     global _YOLO_MODEL
     if _YOLO_MODEL is None:
-        _YOLO_MODEL = YOLO("yolov8l.pt")
+        _YOLO_MODEL = YOLO(_get_person_model_path())
     return _YOLO_MODEL
 
 def calculate_angle(shoulder_center: tuple[float, float], hip_center: tuple[float, float]) -> float:

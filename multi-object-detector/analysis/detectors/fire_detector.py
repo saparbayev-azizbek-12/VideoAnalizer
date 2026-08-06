@@ -9,7 +9,7 @@ import numpy as np
 from ultralytics import YOLO
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH_PT = BASE_DIR / "best.pt"
+MODEL_PATH_PT = BASE_DIR / "../models/best.pt"
 
 _YOLO_MODEL: Optional[YOLO] = None
 

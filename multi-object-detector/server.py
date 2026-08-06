@@ -1,18 +1,19 @@
 from __future__ import annotations
 import os
 import cv2
-import numpy as np
 import torch
+import numpy as np
+from pydantic import BaseModel
+from fastapi.responses import Response
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
-from pydantic import BaseModel
+
 import config
-import models_manager
 import camera_manager
+from analysis import models_manager
+
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-
 app = FastAPI(title="AI Video Monitoring Server")
 
 app.add_middleware(
