@@ -1,34 +1,16 @@
-"""
-main.py
-----------------------------------------------------------------------
-Desktop klient (Windows/Linux/Mac) - GPU serverdagi (server_app.py) ko'p
-kamera + ko'p model (Fire / Fall / Danger-Zone) real-vaqt monitoringini
-kuzatish uchun.
-
-Ishga tushirish:
-    python main.py
-"""
-
 from __future__ import annotations
-
 import time
 import threading
-
 import cv2
 import numpy as np
 import requests
 import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
-
 import config
 
 MODEL_ICONS = {"fire": "🔥", "fall": "🚨", "danger_zone": "⛔"}
 
-
-# ===========================================================================
-# ALOHIDA "KATTA OYNA" - bitta kamerani mustaqil oynada kuzatish
-# ===========================================================================
 class CameraPopout(tk.Toplevel):
     def __init__(self, app: "MonitoringApp", cam_id: str, cam_name: str):
         super().__init__(app.root)
@@ -38,15 +20,12 @@ class CameraPopout(tk.Toplevel):
         self.geometry("880x560")
         self.configure(bg="#000000")
         self.minsize(400, 300)
-
         self._running = True
         self._frame_lock = threading.Lock()
         self._latest_frame = None
         self._photo_ref = None
-
         self.label = tk.Label(self, bg="#000000")
         self.label.pack(fill=tk.BOTH, expand=True)
-
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         threading.Thread(target=self._fetch_loop, daemon=True).start()
         self.after(config.POPOUT_UPDATE_MS, self._refresh)
@@ -88,10 +67,6 @@ class CameraPopout(tk.Toplevel):
         self.app.popouts.pop(self.cam_id, None)
         self.destroy()
 
-
-# ===========================================================================
-# XAVFLI HUDUD (POLIGON) BELGILASH OYNASI - danger_zone modeli uchun
-# ===========================================================================
 class ZoneEditorWindow(tk.Toplevel):
     MAX_W, MAX_H = 900, 600
 
@@ -102,7 +77,6 @@ class ZoneEditorWindow(tk.Toplevel):
         self.title(f"⛶ Xavfli hudud belgilash - {cam_name}")
         self.configure(bg="#1e1e1e")
         self.resizable(False, False)
-
         self.points: list[list[float]] = []
         self.scale = 1.0
         self.canvas: tk.Canvas | None = None
@@ -132,7 +106,6 @@ class ZoneEditorWindow(tk.Toplevel):
 
         self.status_label = tk.Label(self, text="Kadr yuklanmoqda...", bg="#1e1e1e", fg="#ffcc00", font=("Segoe UI", 9))
         self.status_label.pack(padx=10, pady=(0, 10), anchor=tk.W)
-
         threading.Thread(target=self._load_frame, daemon=True).start()
 
     def _load_frame(self) -> None:
@@ -233,10 +206,6 @@ class ZoneEditorWindow(tk.Toplevel):
         messagebox.showinfo("Saqlandi", "Xavfli hudud saqlandi.", parent=self)
         self.destroy()
 
-
-# ===========================================================================
-# ASOSIY ILOVA
-# ===========================================================================
 class MonitoringApp:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -246,8 +215,7 @@ class MonitoringApp:
 
         self.server_url = tk.StringVar(value=config.DEFAULT_SERVER_URL)
         self.is_connected = False
-
-        self.view_mode = "grid"          # "grid" | "single"
+        self.view_mode = "grid"
         self.selected_camera_id: str | None = None
 
         self.camera_cache: dict[str, dict] = {}
@@ -269,12 +237,10 @@ class MonitoringApp:
         self.root.after(400, self.poll_status_loop)
         self.root.after(config.GUI_UPDATE_MS, self.update_display)
 
-    # -------------------------------------------------------------- UI  ---
     def _setup_ui(self) -> None:
         main_frame = tk.Frame(self.root, bg="#1e1e1e")
         main_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
-        # ------------------------------------------------- ULANISH PANELI --
         conn_frame = tk.Frame(main_frame, bg="#252526", bd=1, relief=tk.SOLID)
         conn_frame.pack(fill=tk.X, pady=(0, 8), ipady=6, ipadx=10)
 
@@ -293,7 +259,6 @@ class MonitoringApp:
                                            fg="#ffcc00", bg="#252526")
         self.conn_status_label.pack(side=tk.RIGHT, padx=15)
 
-        # -------------------------------------------------- MODELLAR PANELI-
         models_frame = tk.Frame(main_frame, bg="#252526", bd=1, relief=tk.SOLID)
         models_frame.pack(fill=tk.X, pady=(0, 8), ipady=6, ipadx=10)
 
@@ -313,7 +278,6 @@ class MonitoringApp:
         tk.Label(models_frame, text="(o'chirilgan model uchun tahlil/ramka ko'rsatilmaydi)",
                  font=("Segoe UI", 8, "italic"), fg="#888888", bg="#252526").pack(side=tk.LEFT, padx=10)
 
-        # ------------------------------------------------------- TANA -----
         body_frame = tk.Frame(main_frame, bg="#1e1e1e")
         body_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -332,7 +296,6 @@ class MonitoringApp:
                   font=("Segoe UI", 10, "bold"), bg="#0e8a16", fg="#ffffff",
                   relief=tk.FLAT, padx=8, pady=6, cursor="hand2").pack(fill=tk.X, padx=10, pady=(0, 8))
 
-        # -- aylanuvchi (scroll) kameralar ro'yxati --
         list_container = tk.Frame(sidebar, bg="#2d2d2d")
         list_container.pack(fill=tk.BOTH, expand=True, padx=6)
 
@@ -374,7 +337,6 @@ class MonitoringApp:
         self.display_label.pack(fill=tk.BOTH, expand=True)
         self.display_label.bind("<Button-1>", self.on_display_click)
 
-        # ------------------------------------------------------- HODISALAR-
         alerts_frame = tk.Frame(right_frame, bg="#252526", height=150)
         alerts_frame.pack(fill=tk.X, pady=(6, 0))
         alerts_frame.pack_propagate(False)
@@ -394,7 +356,6 @@ class MonitoringApp:
         self.alerts_text.pack(fill=tk.BOTH, expand=True)
         alerts_scroll.config(command=self.alerts_text.yview)
 
-    # ------------------------------------------------ ULANISHNI TEKSHIRISH-
     def check_server_connection(self) -> None:
         self.conn_status_label.config(text="⏳ Tekshirilmoqda...", fg="#ffcc00")
         threading.Thread(target=self._check_connection_worker, daemon=True).start()
@@ -421,7 +382,6 @@ class MonitoringApp:
         self.is_connected = False
         self.conn_status_label.config(text=f"🔴 {msg}", fg="#ff5555")
 
-    # ------------------------------------------------------- STATUS POLL --
     def poll_status_loop(self) -> None:
         if self.is_connected:
             threading.Thread(target=self._poll_status_worker, daemon=True).start()
@@ -442,7 +402,6 @@ class MonitoringApp:
         self._sync_model_checkboxes(models_list)
         self._update_alerts(events)
 
-    # -------------------------------------------------------- MODELLAR ----
     def on_model_toggle(self, model_id: str) -> None:
         enabled = self.model_vars[model_id].get()
         threading.Thread(target=self._toggle_model_worker, args=(model_id, enabled), daemon=True).start()
@@ -461,7 +420,6 @@ class MonitoringApp:
             if var is not None and var.get() != m["enabled"]:
                 var.set(m["enabled"])
 
-    # --------------------------------------------------------- KAMERALAR --
     def _rebuild_camera_list(self, cams: list[dict]) -> None:
         self.camera_cache = {c["id"]: c for c in cams}
         self.camera_order = [c["id"] for c in cams]
@@ -509,13 +467,13 @@ class MonitoringApp:
 
         tk.Label(dlg, text="Kamera nomi:", bg="#2d2d2d", fg="#fff", font=("Segoe UI", 10)).pack(
             anchor=tk.W, padx=14, pady=(14, 2))
-        name_var = tk.StringVar()
+        name_var = tk.StringVar(value="Kamera1")
         tk.Entry(dlg, textvariable=name_var, font=("Segoe UI", 10), bg="#3c3c3c", fg="#fff",
                   insertbackground="#fff").pack(fill=tk.X, padx=14)
 
         tk.Label(dlg, text="Manba (RTSP URL / video fayl yo'li / vebkamera raqami):",
                  bg="#2d2d2d", fg="#fff", font=("Segoe UI", 10)).pack(anchor=tk.W, padx=14, pady=(10, 2))
-        source_var = tk.StringVar(value="rtsp://user:parol@192.168.1.10:554/Streaming/Channels/101")
+        source_var = tk.StringVar(value="rtsp://rtsp:Qazwsx12@10.41.120.60:554/Streaming/Channels/101")
         tk.Entry(dlg, textvariable=source_var, font=("Segoe UI", 10), bg="#3c3c3c", fg="#fff",
                   insertbackground="#fff").pack(fill=tk.X, padx=14)
 
@@ -577,7 +535,6 @@ class MonitoringApp:
     def open_zone_editor(self, cam_id: str, cam_name: str) -> None:
         ZoneEditorWindow(self, cam_id, cam_name)
 
-    # -------------------------------------------------------- KO'RINISHLAR-
     def _switch_to_single(self, cam_id: str) -> None:
         self.view_mode = "single"
         self.selected_camera_id = cam_id
@@ -610,7 +567,6 @@ class MonitoringApp:
         if idx < n:
             self._switch_to_single(self.camera_order[idx])
 
-    # ----------------------------------------------------------- HODISALAR-
     def _update_alerts(self, events: list[dict]) -> None:
         self.alerts_text.config(state=tk.NORMAL)
         self.alerts_text.delete("1.0", tk.END)
@@ -624,7 +580,6 @@ class MonitoringApp:
                 self.alerts_text.insert(tk.END, f"[{t}] {icon} {cam_name}: {ev.get('label', '')}\n")
         self.alerts_text.config(state=tk.DISABLED)
 
-    # ------------------------------------------------------- TASVIR OQIMI -
     def _preview_fetch_loop(self) -> None:
         while True:
             if not self.is_connected:
@@ -669,11 +624,7 @@ class MonitoringApp:
 
         self.root.after(config.GUI_UPDATE_MS, self.update_display)
 
-    # --------------------------------------------------------------- EXIT-
     def on_closing(self) -> None:
-        # DIQQAT: bu yerda serverdagi kameralarni TO'XTATMAYMIZ - server
-        # klient yopilgandan keyin ham monitoringni davom ettirishi kerak
-        # (xavfsizlik tizimi klient oynasi yopiq bo'lsa ham ishlashi lozim).
         for win in list(self.popouts.values()):
             try:
                 win.on_close()
@@ -681,12 +632,10 @@ class MonitoringApp:
                 pass
         self.root.destroy()
 
-
 def main() -> None:
     root = tk.Tk()
     MonitoringApp(root)
     root.mainloop()
-
 
 if __name__ == "__main__":
     main()

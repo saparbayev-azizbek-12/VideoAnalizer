@@ -1,26 +1,5 @@
-"""
-server_app.py
-----------------------------------------------------------------------
-Ko'p kamera + ko'p model (Fire / Fall / Danger-Zone) uchun REAL-VAQT
-monitoring serveri. GPU'li kompyuterda ishga tushiriladi, desktop klient
-(main.py) esa boshqa (masalan, Windows) kompyuterdan HTTP orqali unga
-ulanadi.
-
-Ishga tushirish (GPU serverda):
-    python server_app.py
-
-Eslatma: bu server ilgarigi "dataset yig'ish" (crop saqlash) vazifasini emas,
-real-vaqtli ko'p-kamera monitoringni bajaradi - kameralar API orqali
-DINAMIK qo'shiladi/o'chiriladi (config.py dagi statik CHANNELS endi
-ishlatilmaydi).
-"""
-
 from __future__ import annotations
-
 import os
-# FFmpeg RTSP auth paketlari UDP da yo'qolmasligi va 401 bermasligi uchun TCP majburiy qilamiz:
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-
 import cv2
 import numpy as np
 import torch
@@ -28,10 +7,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
-
 import config
 import models_manager
 import camera_manager
+
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 app = FastAPI(title="AI Video Monitoring Server")
 
@@ -45,22 +25,14 @@ app.add_middleware(
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-
 @app.on_event("startup")
 def _startup() -> None:
-    # Og'ir modellarni oldindan yuklab qo'yamiz - birinchi kamera ulanganda
-    # kutish bo'lmasligi uchun.
     models_manager.preload_all()
-
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
     camera_manager.stop_all()
 
-
-# ---------------------------------------------------------------------------
-# ULANISHNI TEKSHIRISH
-# ---------------------------------------------------------------------------
 @app.get("/api/health")
 async def health():
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "GPU yo'q (CPU rejimi)"
@@ -72,14 +44,9 @@ async def health():
         "models": models_manager.get_all_enabled(),
     }
 
-
-# ---------------------------------------------------------------------------
-# MODELLARNI YOQISH / O'CHIRISH
-# ---------------------------------------------------------------------------
 class ModelToggleRequest(BaseModel):
     model_id: str
     enabled: bool
-
 
 @app.get("/api/models")
 async def list_models():
@@ -91,7 +58,6 @@ async def list_models():
         ]
     }
 
-
 @app.post("/api/models/toggle")
 async def toggle_model(req: ModelToggleRequest):
     try:
@@ -100,14 +66,9 @@ async def toggle_model(req: ModelToggleRequest):
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "model_id": req.model_id, "enabled": req.enabled}
 
-
-# ---------------------------------------------------------------------------
-# KAMERALARNI BOSHQARISH (dinamik: soni istalgancha o'zgarishi mumkin)
-# ---------------------------------------------------------------------------
 class CameraCreateRequest(BaseModel):
     name: str
-    source: str    # RTSP url, video fayl yo'li, yoki vebkamera raqami ("0")
-
+    source: str
 
 def _camera_to_dict(cam: camera_manager.CameraWorker) -> dict:
     return {
@@ -120,11 +81,9 @@ def _camera_to_dict(cam: camera_manager.CameraWorker) -> dict:
         "last_error": cam.last_error,
     }
 
-
 @app.get("/api/cameras")
 async def list_cameras():
     return {"cameras": [_camera_to_dict(c) for c in camera_manager.list_cameras()]}
-
 
 @app.post("/api/cameras")
 async def create_camera(req: CameraCreateRequest):
@@ -133,7 +92,6 @@ async def create_camera(req: CameraCreateRequest):
     cam = camera_manager.add_camera(req.name.strip(), req.source.strip())
     return {"ok": True, "camera": _camera_to_dict(cam)}
 
-
 @app.delete("/api/cameras/{cam_id}")
 async def delete_camera(cam_id: str):
     ok = camera_manager.remove_camera(cam_id)
@@ -141,13 +99,8 @@ async def delete_camera(cam_id: str):
         raise HTTPException(status_code=404, detail="Kamera topilmadi")
     return {"ok": True}
 
-
-# ---------------------------------------------------------------------------
-# XAVFLI HUDUD (POLIGON) BOSHQARUVI - danger_zone modeli uchun
-# ---------------------------------------------------------------------------
 class ZoneRequest(BaseModel):
-    polygon: list[list[int]]   # [[x, y], [x, y], ...] - piksel koordinatalari
-
+    polygon: list[list[int]]
 
 @app.get("/api/cameras/{cam_id}/zone")
 async def get_zone(cam_id: str):
@@ -155,7 +108,6 @@ async def get_zone(cam_id: str):
     if cam is None:
         raise HTTPException(status_code=404, detail="Kamera topilmadi")
     return {"polygon": cam.get_zone()}
-
 
 @app.post("/api/cameras/{cam_id}/zone")
 async def set_zone(cam_id: str, req: ZoneRequest):
@@ -167,7 +119,6 @@ async def set_zone(cam_id: str, req: ZoneRequest):
     cam.set_zone(req.polygon)
     return {"ok": True}
 
-
 @app.delete("/api/cameras/{cam_id}/zone")
 async def delete_zone(cam_id: str):
     cam = camera_manager.get_camera(cam_id)
@@ -176,17 +127,12 @@ async def delete_zone(cam_id: str):
     cam.clear_zone()
     return {"ok": True}
 
-
-# ---------------------------------------------------------------------------
-# HODISALAR (ALERTS)
-# ---------------------------------------------------------------------------
 @app.get("/api/cameras/{cam_id}/events")
 async def camera_events(cam_id: str, limit: int = 50):
     cam = camera_manager.get_camera(cam_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Kamera topilmadi")
     return {"events": cam.get_recent_events(limit)}
-
 
 @app.get("/api/events")
 async def all_events(limit: int = 100):
@@ -197,15 +143,10 @@ async def all_events(limit: int = 100):
     combined.sort(key=lambda e: e["ts"], reverse=True)
     return {"events": combined[:limit]}
 
-
-# ---------------------------------------------------------------------------
-# JONLI KO'RINISH (PREVIEW)
-# ---------------------------------------------------------------------------
 def _placeholder_tile(w: int, h: int, text: str) -> np.ndarray:
     tile = np.zeros((h, w, 3), dtype=np.uint8)
     cv2.putText(tile, text, (10, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 100, 255), 2, cv2.LINE_AA)
     return tile
-
 
 def _encode_jpeg(frame: np.ndarray) -> bytes:
     ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
@@ -213,13 +154,8 @@ def _encode_jpeg(frame: np.ndarray) -> bytes:
         raise HTTPException(status_code=500, detail="Kadr kodlanmadi")
     return buf.tobytes()
 
-
 @app.get("/api/cameras/{cam_id}/preview")
 async def camera_preview(cam_id: str, raw: int = 0):
-    """
-    raw=0 (standart) -> yoqilgan modellar annotatsiyasi bilan kadr
-    raw=1             -> xom kadr (masalan, zona/poligon belgilash oynasi uchun)
-    """
     cam = camera_manager.get_camera(cam_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Kamera topilmadi")
@@ -230,11 +166,8 @@ async def camera_preview(cam_id: str, raw: int = 0):
 
     return Response(content=_encode_jpeg(frame), media_type="image/jpeg")
 
-
 @app.get("/api/cameras_grid_preview")
 async def cameras_grid_preview():
-    """Barcha kameralarni bitta mozaika (grid) rasmga jamlaydi - kameralar
-    soni o'zgarganda grid o'lchami avtomatik moslashadi."""
     cams = camera_manager.list_cameras()
     tw, th = config.GRID_TILE_W, config.GRID_TILE_H
 
@@ -268,7 +201,6 @@ async def cameras_grid_preview():
 
     return Response(content=_encode_jpeg(grid), media_type="image/jpeg")
 
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server_app:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
