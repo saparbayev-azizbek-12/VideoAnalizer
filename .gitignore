@@ -7,3 +7,7 @@ __pycache__
 *.ipynb
 .env
 uv.lock
+
+*.jpg
+*.json
+multi-object-detector/dataset
