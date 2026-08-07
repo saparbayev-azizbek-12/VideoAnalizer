@@ -1,17 +1,17 @@
 from __future__ import annotations
+import os
+import cv2
+import sys
 import math
 import subprocess
-import sys
-from collections import deque
-from dataclasses import dataclass, field
-from typing import Callable, Optional
-import cv2
 import numpy as np
-from ultralytics import YOLO
 import mediapipe as mp
-
-import os
 from pathlib import Path
+from ultralytics import YOLO
+from collections import deque
+from typing import Callable, Optional
+from dataclasses import dataclass, field
+
 import config
 
 mp_drawing = mp.solutions.drawing_utils
@@ -32,54 +32,22 @@ def _get_person_model_path(custom_path: Optional[str] = None) -> str:
     return "yolov8l.pt"
 
 
-# ---------------------------------------------------------------------------
-# Posture / angle thresholds
-# ---------------------------------------------------------------------------
-# Oldingi qiymat STANDING_ANGLE_DEG=10 juda qattiq edi: oddiy yurish, o'girilish,
-# qo'l cho'zish kabi harakatlar ham 10 gradusdan oshib, darhol "Falling"ga
-# tushib qolardi. Endi standing/sitting uchun alohida, real hayotga yaqinroq
-# chegaralar qo'yildi.
-STANDING_ANGLE_DEG = 22.0       # edi: 10.0
-SITTING_ANGLE_DEG = 40.0        # NEW: o'tirganda torso tabiiy ko'proq og'adi
-LYING_ANGLE_DEG = 58.0          # edi: 60.0 (deyarli bir xil qoldi)
-ANGLE_SMOOTH_WINDOW = 7          # edi: 5 (titrashni ko'proq bosish uchun)
-
+STANDING_ANGLE_DEG = 22.0       
+SITTING_ANGLE_DEG = 40.0        
+LYING_ANGLE_DEG = 58.0         
+ANGLE_SMOOTH_WINDOW = 7         
 VELOCITY_WINDOW_SEC = 0.3
 VELOCITY_THRESHOLD = 1.2
 ASPECT_DROP_RATIO = 0.6
 ASPECT_HISTORY_SEC = 1.0
-
-# "Yiqilish" endi faqat qisqa burchak sakrashi bilan emas, balki YOTGAN holat
-# bir muncha vaqt DAVOM ETGANDA tasdiqlanadi -> yurish/engashish/o'tirish
-# hech qachon shu holatga yetib bormaydi, chunki ular real ravishda 58
-# gradusdan yuqori va bir necha soniya davomida "gorizontal" bo'lib qolmaydi.
-LYING_CONFIRM_SEC = 0.6          # shuncha vaqt "Lying Down" davom etsagina tasdiqlanadi
-RECOVERY_CONFIRM_SEC = 0.8       # signal shuncha vaqt barqaror Standing/Sitting bo'lgach o'chadi
-
-VISIBILITY_MIN = 0.65            # edi: 0.5 (MediaPipe to'silgan nuqtalarga ham past
-                                   # ishonch bilan koordinata berishi mumkin, shu sabab qattiqlashtirildi)
+LYING_CONFIRM_SEC = 0.6          
+RECOVERY_CONFIRM_SEC = 0.8      
+VISIBILITY_MIN = 0.65            
 TRACK_TTL_FRAMES = 15
-
-# --- Hajm bo'yicha filtr: juda kichik/uzoqdagi odam baholanmaydi ---
-MIN_PERSON_HEIGHT_PX = 90         # edi: 60
-MIN_PERSON_AREA_PX = 3500         # edi: 2000
-MIN_PERSON_HEIGHT_RATIO = 0.10    # NEW: bbox balandligi kadr balandligining
-                                    # kamida 10%-ini tashkil qilishi kerak
-                                    # (turli kameralar/rezolyutsiyalarda ham ishlaydi)
-
-# --- Occlusion (to'silish) bo'yicha qattiq chegara ---
-MAX_OCCLUSION_RATIO = 0.40        # tananing 40%+ qismi ko'rinmasa -> BAHOLANMAYDI
-
-# --- Shaxsiy asosiy chiziq (kamera burchagi/linza distorsiyasini
-#     kompensatsiya qilish uchun) ---
-# Fisheye/keng burchakli va qiyshiq o'rnatilgan kamerada, markazdan chetdagi
-# odam piksel koordinatalarida tik tursa ham "og'ib" ko'rinadi. Buni haqiqiy
-# geometrik tuzatish uchun kamera kalibrlash parametrlari (intrinsic matritsa +
-# distortion koeffitsientlari, masalan cv2.fisheye.calibrate() orqali olinadi)
-# kerak bo'ladi - bu skriptda ular yo'q. Shu sababli amaliy yechim sifatida
-# HAR BIR trackning O'ZINING "tinch holatdagi" o'rtacha burchagi hisoblab
-# boriladi va yiqilish ANIQ 0 gradusga emas, balki shu shaxsning ODATDAGI
-# holatidan KATTA OG'ISHGA nisbatan tasdiqlanadi.
+MIN_PERSON_HEIGHT_PX = 90         
+MIN_PERSON_AREA_PX = 3500         
+MIN_PERSON_HEIGHT_RATIO = 0.10    
+MAX_OCCLUSION_RATIO = 0.40   
 BASELINE_WINDOW_SEC = 8.0
 BASELINE_MIN_SAMPLES = 10
 BASELINE_DEVIATION_DEG = 28.0
@@ -98,10 +66,6 @@ def is_valid_person_crop(bbox_w: int, bbox_h: int, frame_w: int, frame_h: int) -
 
 
 def compute_occlusion_ratio(landmarks) -> float:
-    """Barcha 33 ta pose landmark orasida VISIBILITY_MIN dan past ko'rinuvchanlikka
-    ega bo'lganlar ulushi. Occlusion yuqori bo'lsa, MediaPipe baribir taxminiy
-    koordinata qaytarishi mumkin - shu holatni ushlab, baholashdan chiqarib
-    tashlash uchun ishlatiladi."""
     total = len(ALL_POSE_LANDMARKS)
     hidden = sum(1 for lm in ALL_POSE_LANDMARKS if landmarks[lm.value].visibility < VISIBILITY_MIN)
     return hidden / total
@@ -117,16 +81,10 @@ def is_pose_reliable(landmarks) -> bool:
     core_visible = all(landmarks[lm.value].visibility >= VISIBILITY_MIN for lm in core_landmarks)
     if not core_visible:
         return False
-    # Qat'iy talab: tananing 40%+ qismi ko'rinmasa -> ishonchsiz, baholanmaydi
     return compute_occlusion_ratio(landmarks) <= MAX_OCCLUSION_RATIO
 
 
 def estimate_sitting(landmarks, w: int, h: int) -> Optional[bool]:
-    """Tizza (knee) ko'rinadigan bo'lsa, son (hip->knee) segmentining
-    vertikaldan og'ish burchagi orqali o'tirgan/tik turganini taxmin qiladi.
-    O'tirganda son deyarli gorizontal (kamera qiyaligiga qarab), tik turganda
-    esa deyarli vertikal bo'ladi. Tizzalar to'silgan bo'lsa None qaytaradi -
-    bu holda chaqiruvchi funksiya faqat torso burchagiga tayanadi."""
     knee_lms = [mp_pose.PoseLandmark.LEFT_KNEE, mp_pose.PoseLandmark.RIGHT_KNEE]
     hip_lms = [mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.RIGHT_HIP]
     if any(landmarks[lm.value].visibility < VISIBILITY_MIN for lm in knee_lms + hip_lms):
@@ -138,7 +96,7 @@ def estimate_sitting(landmarks, w: int, h: int) -> Optional[bool]:
     dy = abs(knee_y - hip_y)
     dx = abs(knee_x - hip_x)
     thigh_angle_from_vertical = math.degrees(math.atan2(dx, dy)) if (dx or dy) else 0.0
-    return thigh_angle_from_vertical > 45.0  # gorizontalga yaqin -> o'tirgan
+    return thigh_angle_from_vertical > 45.0  
 
 
 def get_model() -> YOLO:
@@ -149,8 +107,6 @@ def get_model() -> YOLO:
 
 
 def calculate_angle(shoulder_center: tuple[float, float], hip_center: tuple[float, float]) -> float:
-    """Torso chizig'ining (yelka->son) vertikaldan og'ish burchagi, gradusda.
-    0 = to'liq tik, 90 = to'liq gorizontal (yotgan)."""
     dx = hip_center[0] - shoulder_center[0]
     dy = hip_center[1] - shoulder_center[1]
     angle = math.degrees(math.atan2(dx, dy)) if (dx or dy) else 0.0
@@ -241,10 +197,6 @@ def process_fall_frame(
     pose,
     track_states: dict[int, TrackState],
 ) -> tuple[np.ndarray, list[dict], bool]:
-    """Bitta kadrni qayta ishlaydigan yagona (yakka) funksiya. process_video
-    ham shu funksiyani chaqiradi - avvalgi versiyada bu mantiq ikki joyda
-    (process_video ichida va bu yerda) deyarli aynan takrorlangan edi, bu esa
-    ikkalasini alohida-alohida yangilashda xatolik xavfini oshirar edi."""
     width, height = frame.shape[1], frame.shape[0]
     events: list[dict] = []
     any_fall_this_frame = False
@@ -271,7 +223,6 @@ def process_fall_frame(
             bbox_w, bbox_h = x2 - x1, y2 - y1
 
             if not is_valid_person_crop(bbox_w, bbox_h, width, height):
-                # juda kichik / juda uzoq - baholanmaydi
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 1)
                 continue
 
@@ -301,7 +252,6 @@ def process_fall_frame(
                     sitting = estimate_sitting(landmarks, w, h)
                     posture = classify_posture(smoothed_angle, sitting)
 
-                    # -- harakat signallari --
                     hip_y_abs = y1 + hip_center[1]
                     state.hip_history.append((frame_idx, hip_y_abs, bbox_h))
                     aspect_ratio = bbox_h / max(bbox_w, 1)
@@ -314,7 +264,6 @@ def process_fall_frame(
                     elif state.fast_signal_ttl > 0:
                         state.fast_signal_ttl -= 1
 
-                    # -- shaxsiy asosiy chiziq (kamera burchagi kompensatsiyasi) --
                     if posture in ("Standing", "Sitting") and not fast_signal:
                         state.baseline_history.append((frame_idx, smoothed_angle))
                     window_frames = int(BASELINE_WINDOW_SEC * fps)
@@ -324,14 +273,12 @@ def process_fall_frame(
                         baseline_angle = sum(a for _, a in state.baseline_history) / len(state.baseline_history)
                         deviation_ok = (smoothed_angle - baseline_angle) >= BASELINE_DEVIATION_DEG
                     else:
-                        deviation_ok = True  # hali yetarli tarix yo'q - faqat absolyut chegaraga tayanamiz
+                        deviation_ok = True
 
                     mp_drawing.draw_landmarks(person_bbox, person_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
                     label = f"ID{track_id}: {posture} ({smoothed_angle:.1f} deg)"
                     cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
 
-                    # -- tasdiqlash: FAQAT barqaror "Lying Down" + yaqinda tezkor
-                    #    signal + shaxsiy asosiy chiziqdan katta og'ish bo'lsagina --
                     state.lying_count = state.lying_count + 1 if posture == "Lying Down" else 0
                     lying_confirm_frames = LYING_CONFIRM_SEC * fps
                     recovery_confirm_frames = RECOVERY_CONFIRM_SEC * fps
@@ -354,8 +301,6 @@ def process_fall_frame(
                     if state.fall_detected:
                         any_fall_this_frame = True
                 else:
-                    # occlusion yuqori / pose ishonchsiz -> bu kadr uchun
-                    # baholanmaydi, lekin oldingi holat saqlanadi
                     cv2.putText(frame, f"ID{track_id}: occluded", (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
 
             frame[y1:y2, x1:x2] = person_bbox

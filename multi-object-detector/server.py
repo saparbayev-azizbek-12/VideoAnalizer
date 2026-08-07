@@ -1,10 +1,10 @@
 from __future__ import annotations
 import os
 import io
-import time
-import zipfile
 import cv2
+import time
 import torch
+import zipfile
 import numpy as np
 from pydantic import BaseModel
 from fastapi.responses import Response

@@ -1,13 +1,12 @@
-import argparse
+import sys
+import cv2
 import csv
 import json
-import sys
 import time
-from pathlib import Path
-from typing import Optional
-import cv2
+import argparse
 import numpy as np
 import supervision as sv
+from typing import Optional
 from ultralytics import YOLO
 
 PERSON_CLASS_ID = 0

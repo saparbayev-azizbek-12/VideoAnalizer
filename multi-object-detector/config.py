@@ -1,26 +1,16 @@
 import os
 import sys
+from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(BASE_DIR)
 
-def _load_env():
-    for env_path in [os.path.join(PARENT_DIR, ".env"), os.path.join(BASE_DIR, ".env")]:
-        if os.path.exists(env_path):
-            try:
-                with open(env_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#") or "=" not in line:
-                            continue
-                        k, v = line.split("=", 1)
-                        k, v = k.strip(), v.strip().strip("'\"")
-                        if k and k not in os.environ:
-                            os.environ[k] = v
-            except Exception:
-                pass
+# .env faylini yuklash
+for env_path in [os.path.join(PARENT_DIR, ".env"), os.path.join(BASE_DIR, ".env")]:
+    if os.path.exists(env_path):
+        load_dotenv(dotenv_path=env_path)
+        break
 
-_load_env()
 
 DETECTORS_DIR = os.path.join(BASE_DIR, "analysis", "detectors")
 if os.path.exists(DETECTORS_DIR) and DETECTORS_DIR not in sys.path:

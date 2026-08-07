@@ -31,12 +31,11 @@ REJIMLAR:
 
 from __future__ import annotations
 
-import argparse
-import glob
 import os
-import sys
-
 import cv2
+import sys
+import glob
+import argparse
 import numpy as np
 
 

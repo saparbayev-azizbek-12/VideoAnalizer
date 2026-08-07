@@ -1,12 +1,12 @@
 from __future__ import annotations
-import subprocess
 import sys
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Callable, Optional
 import cv2
+import subprocess
 import numpy as np
+from pathlib import Path
 from ultralytics import YOLO
+from typing import Callable, Optional
+from dataclasses import dataclass, field
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH_PT = BASE_DIR / "../models/best.pt"

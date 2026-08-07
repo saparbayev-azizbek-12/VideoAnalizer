@@ -1,13 +1,13 @@
 from __future__ import annotations
-import time
-import threading
 import cv2
-import numpy as np
-import requests
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from PIL import Image, ImageTk
+import time
 import config
+import requests
+import threading
+import numpy as np
+import tkinter as tk
+from PIL import Image, ImageTk
+from tkinter import messagebox, filedialog
 
 MODEL_ICONS = {"fire": "🔥", "fall": "🚨", "danger_zone": "⛔"}
 

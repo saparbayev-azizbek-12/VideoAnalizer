@@ -11,18 +11,16 @@ Ishga tushirish (GPU/Remote Serverda):
 from __future__ import annotations
 
 import os
-import threading
-import time
-from typing import Optional
-
 import cv2
+import time
+import threading
 import numpy as np
+from typing import Optional
+from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
-from pydantic import BaseModel
 
-# RTSP oqimlarini serverda TCP orqali barqaror ochish:
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 app = FastAPI(title="Camera Manual Remap Server")

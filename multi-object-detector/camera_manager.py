@@ -1,14 +1,15 @@
 from __future__ import annotations
 import os
-import json
-import threading
+import cv2
 import time
+import json
 import uuid
+import threading
+import numpy as np
+from typing import Optional
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
-import cv2
-import numpy as np
+
 import config
 from analysis import models_manager
 from analysis.detectors import fall_detector, danger_zone_detector
