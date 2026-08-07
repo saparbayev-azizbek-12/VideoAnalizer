@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import requests
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 import config
 
@@ -253,11 +253,17 @@ class MonitoringApp:
         tk.Button(conn_frame, text="🔌 Ulanishni Tekshirish", command=self.check_server_connection,
                   font=("Segoe UI", 10, "bold"), bg="#007acc", fg="#ffffff",
                   activebackground="#005999", activeforeground="#ffffff",
-                  relief=tk.FLAT, padx=12, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=10)
+                  relief=tk.FLAT, padx=12, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=5)
+
+        tk.Button(conn_frame, text="📦 Datasetni yuklab olish", command=self.download_dataset,
+                  font=("Segoe UI", 10, "bold"), bg="#6f42c1", fg="#ffffff",
+                  activebackground="#5a32a3", activeforeground="#ffffff",
+                  relief=tk.FLAT, padx=12, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=5)
 
         self.conn_status_label = tk.Label(conn_frame, text="● Tekshirilmadi", font=("Segoe UI", 11, "bold"),
                                            fg="#ffcc00", bg="#252526")
         self.conn_status_label.pack(side=tk.RIGHT, padx=15)
+
 
         models_frame = tk.Frame(main_frame, bg="#252526", bd=1, relief=tk.SOLID)
         models_frame.pack(fill=tk.X, pady=(0, 8), ipady=6, ipadx=10)
@@ -356,9 +362,46 @@ class MonitoringApp:
         self.alerts_text.pack(fill=tk.BOTH, expand=True)
         alerts_scroll.config(command=self.alerts_text.yview)
 
+    def download_dataset(self) -> None:
+        if not self.is_connected:
+            messagebox.showwarning("Ogohlantirish", "Avval serverga ulaning!", parent=self.root)
+            return
+
+        save_path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Datasetni saqlash",
+            defaultextension=".zip",
+            filetypes=[("Zip fayllar", "*.zip"), ("Barcha fayllar", "*.*")],
+            initialfile=f"dataset_{int(time.time())}.zip"
+        )
+        if not save_path:
+            return
+
+        threading.Thread(target=self._download_dataset_worker, args=(save_path,), daemon=True).start()
+
+    def _download_dataset_worker(self, save_path: str) -> None:
+        url = self.server_url.get().rstrip("/")
+        try:
+            res = requests.get(f"{url}/api/dataset/download", stream=True, timeout=60)
+            if res.status_code == 200:
+                with open(save_path, "wb") as f:
+                    for chunk in res.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                self.root.after(0, lambda: messagebox.showinfo("Muvaffaqiyatli", f"Dataset muvaffaqiyatli yuklab olindi!\nManzil: {save_path}", parent=self.root))
+            else:
+                try:
+                    err = res.json().get("detail", "Server xatoligi")
+                except Exception:
+                    err = f"HTTP {res.status_code}"
+                self.root.after(0, lambda: messagebox.showwarning("Ogohlantirish", f"Dataset yuklab olinmadi: {err}", parent=self.root))
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Xatolik", f"Yuklab olishda xatolik yuz berdi: {e}", parent=self.root))
+
     def check_server_connection(self) -> None:
         self.conn_status_label.config(text="⏳ Tekshirilmoqda...", fg="#ffcc00")
         threading.Thread(target=self._check_connection_worker, daemon=True).start()
+
 
     def _check_connection_worker(self) -> None:
         url = self.server_url.get().rstrip("/")

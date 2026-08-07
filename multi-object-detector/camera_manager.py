@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import json
 import threading
 import time
 import uuid
@@ -44,6 +45,8 @@ class CameraWorker:
         self._zone_polygon: Optional[np.ndarray] = None
         self._zone_state: Optional[danger_zone_detector.DangerZoneState] = None
         self._zone_lock = threading.Lock()
+        self._last_dataset_save: dict[str, float] = {}
+
 
     @property
     def connected(self) -> bool:
@@ -178,12 +181,53 @@ class CameraWorker:
         with self._lock:
             self.events.append(CameraEvent(ts=time.time(), model=model, label=label, extra=extra))
 
+    def _save_dataset_snapshot(self, model: str, frame_to_save: np.ndarray, extra_info: dict) -> Optional[str]:
+        now = time.time()
+        last_time = self._last_dataset_save.get(model, 0.0)
+        if now - last_time < config.SNAPSHOT_COOLDOWN_SEC:
+            return None
+        self._last_dataset_save[model] = now
+
+        try:
+            model_dir = os.path.join(config.DATASET_DIR, model)
+            os.makedirs(model_dir, exist_ok=True)
+            timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+            ms = int((now % 1) * 1000)
+            filename = f"{self.id}_{model}_{timestamp_str}_{ms:03d}.jpg"
+            file_path = os.path.join(model_dir, filename)
+
+            # Save frame image
+            cv2.imwrite(file_path, frame_to_save)
+
+            # Save corresponding metadata JSON file
+            meta_path = os.path.join(model_dir, f"{self.id}_{model}_{timestamp_str}_{ms:03d}.json")
+            meta_data = {
+                "camera_id": self.id,
+                "camera_name": self.name,
+                "model": model,
+                "timestamp": now,
+                "timestamp_str": timestamp_str,
+                "image_filename": filename,
+                "extra": extra_info,
+            }
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta_data, f, ensure_ascii=False, indent=2)
+
+            return filename
+        except Exception as e:
+            print(f"[Dataset] Snapshot saqlashda xatolik: {e}")
+            return None
+
     def _analyze(self, frame: np.ndarray) -> np.ndarray:
         out = frame
         if models_manager.is_enabled("fire"):
             out, fire_events, _has_fire, _has_smoke = models_manager.analyze_fire(out)
             for ev in fire_events:
-                self._log_event("fire", f"{ev['type']} aniqlandi ({ev['confidence'] * 100:.0f}%)", box=ev["box"], confidence=ev["confidence"], type=ev["type"])
+                snap = self._save_dataset_snapshot("fire", out, ev)
+                extra = dict(box=ev["box"], confidence=ev["confidence"], type=ev["type"])
+                if snap:
+                    extra["image"] = snap
+                self._log_event("fire", f"{ev['type']} aniqlandi ({ev['confidence'] * 100:.0f}%)", **extra)
 
         if models_manager.is_enabled("fall"):
             if self._fall_model is None:
@@ -199,7 +243,11 @@ class CameraWorker:
                 self._fall_track_states,
             )
             for ev in fall_events:
-                self._log_event("fall", f"Yiqilish aniqlandi (ID {ev['track_id']})", track_id=ev["track_id"])
+                snap = self._save_dataset_snapshot("fall", out, ev)
+                extra = dict(track_id=ev["track_id"])
+                if snap:
+                    extra["image"] = snap
+                self._log_event("fall", f"Yiqilish aniqlandi (ID {ev['track_id']})", **extra)
 
         if models_manager.is_enabled("danger_zone"):
             with self._zone_lock:
@@ -207,7 +255,11 @@ class CameraWorker:
             if zone_state is not None:
                 out, people_in_zone, breach = models_manager.analyze_danger_zone(zone_state, out)
                 if breach:
-                    self._log_event("danger_zone", f"Xavfli hududda {people_in_zone} kishi aniqlandi", people_in_zone=people_in_zone)
+                    snap = self._save_dataset_snapshot("danger_zone", out, {"people_in_zone": people_in_zone})
+                    extra = dict(people_in_zone=people_in_zone)
+                    if snap:
+                        extra["image"] = snap
+                    self._log_event("danger_zone", f"Xavfli hududda {people_in_zone} kishi aniqlandi", **extra)
 
         return out
 

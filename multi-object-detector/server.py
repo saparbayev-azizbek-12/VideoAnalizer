@@ -1,5 +1,8 @@
 from __future__ import annotations
 import os
+import io
+import time
+import zipfile
 import cv2
 import torch
 import numpy as np
@@ -11,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import config
 import camera_manager
 from analysis import models_manager
+
 
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
@@ -143,6 +147,57 @@ async def all_events(limit: int = 100):
             combined.append({"camera_id": cam.id, "camera_name": cam.name, **ev})
     combined.sort(key=lambda e: e["ts"], reverse=True)
     return {"events": combined[:limit]}
+
+@app.get("/api/dataset/info")
+async def dataset_info():
+    dataset_dir = config.DATASET_DIR
+    if not os.path.exists(dataset_dir):
+        return {"total_images": 0, "models": {}, "total_size_mb": 0.0}
+
+    total_images = 0
+    total_bytes = 0
+    models_stats = {}
+
+    for root, _, files in os.walk(dataset_dir):
+        rel_dir = os.path.relpath(root, dataset_dir)
+        img_files = [f for f in files if f.lower().endswith((".jpg", ".png", ".jpeg"))]
+        if img_files:
+            model_name = rel_dir if rel_dir != "." else "general"
+            models_stats[model_name] = len(img_files)
+            total_images += len(img_files)
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.isfile(fp):
+                total_bytes += os.path.getsize(fp)
+
+    return {
+        "total_images": total_images,
+        "models": models_stats,
+        "total_size_mb": round(total_bytes / (1024 * 1024), 2),
+    }
+
+@app.get("/api/dataset/download")
+async def download_dataset():
+    dataset_dir = config.DATASET_DIR
+    if not os.path.exists(dataset_dir) or not os.listdir(dataset_dir):
+        raise HTTPException(status_code=400, detail="Datasetda hali rasmlar mavjud emas")
+
+    mem_zip = io.BytesIO()
+    with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for root, _, files in os.walk(dataset_dir):
+            for file in files:
+                abs_path = os.path.join(root, file)
+                rel_path = os.path.relpath(abs_path, os.path.dirname(dataset_dir))
+                zf.write(abs_path, arcname=rel_path)
+
+    mem_zip.seek(0)
+    filename = f"dataset_{int(time.time())}.zip"
+    return Response(
+        content=mem_zip.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
 
 def _placeholder_tile(w: int, h: int, text: str) -> np.ndarray:
     tile = np.zeros((h, w, 3), dtype=np.uint8)
