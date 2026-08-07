@@ -516,7 +516,8 @@ class MonitoringApp:
 
         tk.Label(dlg, text="Manba (RTSP URL / video fayl yo'li / vebkamera raqami):",
                  bg="#2d2d2d", fg="#fff", font=("Segoe UI", 10)).pack(anchor=tk.W, padx=14, pady=(10, 2))
-        source_var = tk.StringVar(value="rtsp://rtsp:Qazwsx12@10.41.120.60:554/Streaming/Channels/101")
+        source_var = tk.StringVar(value=config.DEFAULT_CAMERA_SOURCE)
+
         tk.Entry(dlg, textvariable=source_var, font=("Segoe UI", 10), bg="#3c3c3c", fg="#fff",
                   insertbackground="#fff").pack(fill=tk.X, padx=14)
 
