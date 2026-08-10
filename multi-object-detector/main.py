@@ -58,7 +58,7 @@ class CameraPopout(tk.Toplevel):
             resized = cv2.resize(frame, (new_w, new_h))
             rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(rgb)
-            self._photo_ref = ImageTk.PhotoImage(image=img)
+            self._photo_ref = ImageTk.PhotoImage(image=Image.fromarray(rgb))
             self.label.config(image=self._photo_ref)
         self.after(config.POPOUT_UPDATE_MS, self._refresh)
 
@@ -264,7 +264,6 @@ class MonitoringApp:
                                            fg="#ffcc00", bg="#252526")
         self.conn_status_label.pack(side=tk.RIGHT, padx=15)
 
-
         models_frame = tk.Frame(main_frame, bg="#252526", bd=1, relief=tk.SOLID)
         models_frame.pack(fill=tk.X, pady=(0, 8), ipady=6, ipadx=10)
 
@@ -401,7 +400,6 @@ class MonitoringApp:
     def check_server_connection(self) -> None:
         self.conn_status_label.config(text="⏳ Tekshirilmoqda...", fg="#ffcc00")
         threading.Thread(target=self._check_connection_worker, daemon=True).start()
-
 
     def _check_connection_worker(self) -> None:
         url = self.server_url.get().rstrip("/")

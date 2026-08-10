@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 
 import config
 
-
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 
@@ -78,22 +77,28 @@ def undistort_frame(frame: np.ndarray, calib_path: Optional[str] = None) -> np.n
     map1, map2 = maps
     return cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
 
-STANDING_ANGLE_DEG = 30.0
-LYING_ANGLE_DEG = 70.0
-ANGLE_SMOOTH_WINDOW = 5
-FALL_MIN_FRAMES_RATIO = 0.1
-FALL_MAX_FRAMES_RATIO = 0.5
-VELOCITY_WINDOW_SEC = 0.3
-VELOCITY_THRESHOLD = 1.2
-ASPECT_DROP_RATIO = 0.6
-ASPECT_HISTORY_SEC = 1.0
-VISIBILITY_MIN = 0.5
+STANDING_ANGLE_DEG = 22.0
+LYING_ANGLE_DEG = 62.0
+ANGLE_SMOOTH_WINDOW = 11
+
+FALL_MIN_FRAMES_RATIO = 0.28
+FALL_MAX_FRAMES_RATIO = 0.90
+
+VELOCITY_WINDOW_SEC = 0.4
+VELOCITY_THRESHOLD = 2.2
+ASPECT_DROP_RATIO = 0.42
+ASPECT_HISTORY_SEC = 1.5
+
+VISIBILITY_MIN = 0.70
 TRACK_TTL_FRAMES = 15
 
-MIN_PERSON_HEIGHT_PX = 60
-MIN_PERSON_AREA_PX = 2000
-MAX_OCCLUSION_RATIO = 0.40
+MIN_PERSON_HEIGHT_PX = 90
+MIN_PERSON_AREA_PX = 5000
+MAX_OCCLUSION_RATIO = 0.15
 MIN_VISIBLE_LANDMARKS_RATIO = 1.0 - MAX_OCCLUSION_RATIO
+
+FALL_CONFIRM_FRAMES = 4
+STANDING_MIN_FRAMES = 10
 
 def is_valid_person_crop(bbox_w: int, bbox_h: int) -> bool:
     if bbox_h < MIN_PERSON_HEIGHT_PX:
@@ -176,6 +181,8 @@ class TrackState:
     falling_count: int = 0
     fall_detected: bool = False
     last_seen_frame: int = 0
+    confirm_count: int = 0
+    standing_frames: int = 0
 
 ProgressCallback = Callable[[int, int], None]
 
@@ -229,7 +236,11 @@ def process_video(
     frame_idx = 0
     track_states: dict[int, TrackState] = {}
 
-    with mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5) as pose:
+    with mp_pose.Pose(
+        static_image_mode=True,
+        min_detection_confidence=0.75,
+        min_tracking_confidence=0.75,
+    ) as pose:
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
@@ -293,10 +304,10 @@ def process_video(
                             state.aspect_history.append((frame_idx, aspect_ratio))
                             velocity = _vertical_velocity(state.hip_history, fps)
                             aspect_drop = _aspect_dropped(state.aspect_history, fps)
-                            fast_signal = (velocity >= VELOCITY_THRESHOLD) or aspect_drop
+                            fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
                             mp_drawing.draw_landmarks(person_bbox, person_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-                            label = f"ID{track_id}: {posture} ({smoothed_angle:.1f} deg)"
-                            cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                            label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}°) v={velocity:.2f}"
+                            cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
                             if posture in ("Falling", "Lying Down"):
                                 state.falling_count += 1
                             else:
@@ -304,12 +315,25 @@ def process_video(
                             min_f = FALL_MIN_FRAMES_RATIO * fps
                             max_f = FALL_MAX_FRAMES_RATIO * fps
                             angle_condition = min_f <= state.falling_count <= max_f
-                            if angle_condition and fast_signal:
+                            can_trigger = (
+                                angle_condition
+                                and fast_signal
+                                and state.standing_frames >= STANDING_MIN_FRAMES
+                            )
+                            if can_trigger:
+                                state.confirm_count += 1
+                            else:
+                                state.confirm_count = max(0, state.confirm_count - 1)
+                            if state.confirm_count >= FALL_CONFIRM_FRAMES:
                                 if not state.fall_detected:
                                     fall_events.append(FallEvent(frame_index=frame_idx, timestamp_sec=frame_idx / fps, track_id=track_id))
                                 state.fall_detected = True
                             if posture == "Standing":
                                 state.fall_detected = False
+                                state.confirm_count = 0
+                                state.standing_frames += 1
+                            else:
+                                state.standing_frames = 0
                             if state.fall_detected:
                                 any_fall_this_frame = True
                     frame[y1:y2, x1:x2] = person_bbox
@@ -334,7 +358,11 @@ def create_tracking_model(model_path: str = "yolov8l.pt") -> YOLO:
     return YOLO(model_path)
 
 def create_pose_instance():
-    return mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
+    return mp_pose.Pose(
+        static_image_mode=True,
+        min_detection_confidence=0.75,
+        min_tracking_confidence=0.75,
+    )
 
 def process_fall_frame(
     frame: np.ndarray,
@@ -407,10 +435,10 @@ def process_fall_frame(
                     state.aspect_history.append((frame_idx, aspect_ratio))
                     velocity = _vertical_velocity(state.hip_history, fps)
                     aspect_drop = _aspect_dropped(state.aspect_history, fps)
-                    fast_signal = (velocity >= VELOCITY_THRESHOLD) or aspect_drop
+                    fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
                     mp_drawing.draw_landmarks(person_bbox, person_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-                    label = f"ID{track_id}: {posture} ({smoothed_angle:.1f} deg)"
-                    cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                    label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}°) v={velocity:.2f}"
+                    cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
                     if posture in ("Falling", "Lying Down"):
                         state.falling_count += 1
                     else:
@@ -418,12 +446,25 @@ def process_fall_frame(
                     min_f = FALL_MIN_FRAMES_RATIO * fps
                     max_f = FALL_MAX_FRAMES_RATIO * fps
                     angle_condition = min_f <= state.falling_count <= max_f
-                    if angle_condition and fast_signal:
+                    can_trigger = (
+                        angle_condition
+                        and fast_signal
+                        and state.standing_frames >= STANDING_MIN_FRAMES
+                    )
+                    if can_trigger:
+                        state.confirm_count += 1
+                    else:
+                        state.confirm_count = max(0, state.confirm_count - 1)
+                    if state.confirm_count >= FALL_CONFIRM_FRAMES:
                         if not state.fall_detected:
                             events.append({"track_id": track_id, "frame_index": frame_idx, "timestamp_sec": round(frame_idx / fps, 2)})
                         state.fall_detected = True
                     if posture == "Standing":
                         state.fall_detected = False
+                        state.confirm_count = 0
+                        state.standing_frames += 1
+                    else:
+                        state.standing_frames = 0
                     if state.fall_detected:
                         any_fall_this_frame = True
             frame[y1:y2, x1:x2] = person_bbox

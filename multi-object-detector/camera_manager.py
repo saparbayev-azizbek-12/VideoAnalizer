@@ -14,7 +14,6 @@ import config
 from analysis import models_manager
 from analysis.detectors import fall_detector, danger_zone_detector
 
-
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 @dataclass
@@ -47,7 +46,6 @@ class CameraWorker:
         self._zone_state: Optional[danger_zone_detector.DangerZoneState] = None
         self._zone_lock = threading.Lock()
         self._last_dataset_save: dict[str, float] = {}
-
 
     @property
     def connected(self) -> bool:
@@ -197,10 +195,8 @@ class CameraWorker:
             filename = f"{self.id}_{model}_{timestamp_str}_{ms:03d}.jpg"
             file_path = os.path.join(model_dir, filename)
 
-            # Save frame image
             cv2.imwrite(file_path, frame_to_save)
 
-            # Save corresponding metadata JSON file
             meta_path = os.path.join(model_dir, f"{self.id}_{model}_{timestamp_str}_{ms:03d}.json")
             meta_data = {
                 "camera_id": self.id,

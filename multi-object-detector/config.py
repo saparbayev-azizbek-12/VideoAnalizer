@@ -5,12 +5,10 @@ from dotenv import load_dotenv
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(BASE_DIR)
 
-# .env faylini yuklash
 for env_path in [os.path.join(PARENT_DIR, ".env"), os.path.join(BASE_DIR, ".env")]:
     if os.path.exists(env_path):
         load_dotenv(dotenv_path=env_path)
         break
-
 
 DETECTORS_DIR = os.path.join(BASE_DIR, "analysis", "detectors")
 if os.path.exists(DETECTORS_DIR) and DETECTORS_DIR not in sys.path:

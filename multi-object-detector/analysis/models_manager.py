@@ -6,7 +6,6 @@ import config
 import fire_detector
 import danger_zone_detector
 
-
 _state_lock = threading.Lock()
 _enabled: dict[str, bool] = dict(config.MODEL_DEFAULT_ENABLED)
 
