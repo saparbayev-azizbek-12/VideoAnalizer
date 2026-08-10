@@ -4,27 +4,73 @@ import cv2
 import subprocess
 import numpy as np
 from pathlib import Path
-from ultralytics import YOLO
 from typing import Callable, Optional
 from dataclasses import dataclass, field
 from collections import deque
 
-BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH_PT = BASE_DIR / "../models/best.pt"
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+VIT_MODEL_DIR = BASE_DIR / "analysis" / "models" / "vit-fire-detection"
+VIT_HF_REPO = "EdBianchi/vit-fire-detection"
 
-_YOLO_MODEL: Optional[YOLO] = None
+LABEL_FIRE = "Fire"
+LABEL_SMOKE = "Smoke"
+LABEL_NORMAL = "Normal"
 
-CLASS_FIRE = 0
-CLASS_SMOKE = 2
+_vit_processor = None
+_vit_model = None
 
-def get_model() -> YOLO:
-    global _YOLO_MODEL
-    if _YOLO_MODEL is None:
-        if MODEL_PATH_PT.exists():
-            _YOLO_MODEL = YOLO(str(MODEL_PATH_PT))
-        else:
-            raise FileNotFoundError("Na best.onnx va na best.pt fayli topilmadi!")
-    return _YOLO_MODEL
+def _ensure_model_downloaded() -> None:
+    if VIT_MODEL_DIR.exists() and (VIT_MODEL_DIR / "config.json").exists():
+        return
+    print(f"ViT fire detection modeli yuklanmoqda: {VIT_HF_REPO} -> {VIT_MODEL_DIR}")
+    try:
+        from huggingface_hub import snapshot_download
+        snapshot_download(
+            repo_id=VIT_HF_REPO,
+            local_dir=str(VIT_MODEL_DIR),
+            ignore_patterns=["*.ot", "flax_model*", "tf_model*", "rust_model*"],
+        )
+        print("Model muvaffaqiyatli yuklandi.")
+    except Exception as e:
+        raise RuntimeError(
+            f"ViT fire detection modelini yuklab bo'lmadi: {e}\n"
+            f"Modelni qo'lda yuklab {VIT_MODEL_DIR} papkasiga joylashtiring:\n"
+            f"  pip install huggingface_hub\n"
+            f"  python -c \"from huggingface_hub import snapshot_download; "
+            f"snapshot_download('{VIT_HF_REPO}', local_dir='{VIT_MODEL_DIR}')\""
+        ) from e
+
+def get_model():
+    global _vit_processor, _vit_model
+    if _vit_processor is None or _vit_model is None:
+        _ensure_model_downloaded()
+        from transformers import ViTForImageClassification, ViTImageProcessor
+        _vit_processor = ViTImageProcessor.from_pretrained(str(VIT_MODEL_DIR))
+        _vit_model = ViTForImageClassification.from_pretrained(str(VIT_MODEL_DIR))
+        _vit_model.eval()
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            _vit_model = _vit_model.to(device)
+        except Exception:
+            pass
+    return _vit_processor, _vit_model
+
+def _classify_frame(processor, model, frame_bgr: np.ndarray) -> tuple[str, float]:
+    import torch
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    from PIL import Image as PILImage
+    pil_img = PILImage.fromarray(rgb)
+    inputs = processor(images=pil_img, return_tensors="pt")
+    device = next(model.parameters()).device
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    with torch.no_grad():
+        logits = model(**inputs).logits
+    probs = torch.softmax(logits, dim=-1)[0].cpu().tolist()
+    id2label = model.config.id2label
+    results = [(id2label[i], p) for i, p in enumerate(probs)]
+    best_label, best_conf = max(results, key=lambda x: x[1])
+    return best_label, best_conf
 
 @dataclass
 class FireEvent:
@@ -47,24 +93,6 @@ class ProcessingResult:
 
 ProgressCallback = Callable[[int, int], None]
 
-def _fire_color_ratio(frame: np.ndarray, box: list[int]) -> float:
-    x1, y1, x2, y2 = box
-    x1, y1 = max(x1, 0), max(y1, 0)
-    x2, y2 = min(x2, frame.shape[1]), min(y2, frame.shape[0])
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-    roi = frame[y1:y2, x1:x2]
-    if roi.size == 0:
-        return 0.0
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    hue_mask = (h <= 35) | (h >= 160)
-    fire_mask = hue_mask & (s >= 60) & (v >= 140)
-    return float(np.count_nonzero(fire_mask)) / float(fire_mask.size)
-
-def _is_valid_fire_box(frame: np.ndarray, box: list[int], min_color_ratio: float) -> bool:
-    return _fire_color_ratio(frame, box) >= min_color_ratio
-
 class TemporalValidator:
     def __init__(self, window: int = 6, min_hits: int = 3):
         self.window = window
@@ -82,13 +110,6 @@ class TemporalValidator:
     def reset(self) -> None:
         self._fire_hist.clear()
         self._smoke_hist.clear()
-
-def _draw_detection(frame: np.ndarray, box: list[int], color: tuple[int, int, int], label: str) -> None:
-    x1, y1, x2, y2 = box
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-    cv2.rectangle(frame, (x1, max(y1 - th - 10, 0)), (x1 + tw + 8, max(y1, th + 10)), color, -1)
-    cv2.putText(frame, label, (x1 + 4, max(y1 - 5, th + 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
 
 def _draw_banner(frame: np.ndarray, width: int, confirmed_fire: bool, confirmed_smoke: bool) -> str:
     if confirmed_fire and confirmed_smoke:
@@ -111,9 +132,8 @@ def process_video(
     input_path: str,
     output_path: str,
     progress_callback: Optional[ProgressCallback] = None,
-    conf_threshold: float = 0.30,
-    fire_conf_threshold: float = 0.60,
-    min_color_ratio: float = 0.18,
+    fire_conf_threshold: float = 0.70,
+    smoke_conf_threshold: float = 0.65,
     confirm_window: int = 6,
     confirm_min_hits: int = 3,
 ) -> ProcessingResult:
@@ -130,9 +150,9 @@ def process_video(
     smoke_detected_global = False
     events: list[FireEvent] = []
     frame_idx = 0
-    model = get_model()
     last_event_sec = -1.0
     validator = TemporalValidator(window=confirm_window, min_hits=confirm_min_hits)
+    processor, model = get_model()
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -142,116 +162,72 @@ def process_video(
         timestamp_sec = frame_idx / fps
         if progress_callback:
             progress_callback(frame_idx, total_frames)
-        results = model(frame, verbose=False, conf=conf_threshold)
-        frame_has_fire = False
-        frame_has_smoke = False
-        max_conf = 0.0
-        primary_box = [0, 0, 0, 0]
-        pending_draws: list[tuple[list[int], tuple[int, int, int], str]] = []
 
-        for result in results:
-            boxes = result.boxes
-            if boxes is None or len(boxes) == 0:
-                continue
-            for box in boxes:
-                cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-                xyxy = box.xyxy[0].cpu().numpy().astype(int)
-                bbox = [int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])]
-                if cls_id == CLASS_FIRE:
-                    if conf < fire_conf_threshold:
-                        continue
-                    if not _is_valid_fire_box(frame, bbox, min_color_ratio):
-                        continue
-                    frame_has_fire = True
-                    color = (46, 87, 228)
-                    label = f"FIRE {conf * 100:.0f}%"
-                elif cls_id == CLASS_SMOKE:
-                    frame_has_smoke = True
-                    color = (65, 164, 217)
-                    label = f"SMOKE {conf * 100:.0f}%"
-                else:
-                    continue
-                if conf > max_conf:
-                    max_conf = conf
-                    primary_box = bbox
-                pending_draws.append((bbox, color, label))
+        label, conf = _classify_frame(processor, model, frame)
+        frame_has_fire = label == LABEL_FIRE and conf >= fire_conf_threshold
+        frame_has_smoke = label == LABEL_SMOKE and conf >= smoke_conf_threshold
 
         confirmed_fire, confirmed_smoke = validator.update(frame_has_fire, frame_has_smoke)
 
         if confirmed_fire or confirmed_smoke:
-            for bbox, color, label in pending_draws:
-                _draw_detection(frame, bbox, color, label)
             event_type = _draw_banner(frame, width, confirmed_fire, confirmed_smoke)
             if confirmed_fire:
                 fire_detected_global = True
             if confirmed_smoke:
                 smoke_detected_global = True
             if timestamp_sec - last_event_sec >= 0.8:
-                events.append(FireEvent(frame_index=frame_idx, timestamp_sec=round(timestamp_sec, 2), event_type=event_type, confidence=round(max_conf, 2), box=primary_box))
+                events.append(FireEvent(
+                    frame_index=frame_idx,
+                    timestamp_sec=round(timestamp_sec, 2),
+                    event_type=event_type,
+                    confidence=round(conf, 2),
+                    box=[0, 0, 0, 0],
+                ))
                 last_event_sec = timestamp_sec
 
         out.write(frame)
 
     cap.release()
     out.release()
-    return ProcessingResult(output_path=output_path, fps=fps, width=width, height=height, total_frames=frame_idx, fire_detected=fire_detected_global, smoke_detected=smoke_detected_global, events=events)
+    return ProcessingResult(
+        output_path=output_path, fps=fps, width=width, height=height,
+        total_frames=frame_idx, fire_detected=fire_detected_global,
+        smoke_detected=smoke_detected_global, events=events,
+    )
 
 def detect_fire_frame(
     frame: np.ndarray,
-    model: Optional[YOLO] = None,
-    conf_threshold: float = 0.30,
-    fire_conf_threshold: float = 0.60,
-    min_color_ratio: float = 0.18,
+    model=None,
+    conf_threshold: float = 0.70,
+    fire_conf_threshold: float = 0.70,
+    min_color_ratio: float = 0.0,
     validator: Optional[TemporalValidator] = None,
     draw_banner: bool = True,
 ) -> tuple[np.ndarray, list[dict], bool, bool]:
     if model is None:
-        model = get_model()
-    results = model(frame, verbose=False, conf=conf_threshold)
-    frame_has_fire = False
-    frame_has_smoke = False
-    detections: list[dict] = []
-    pending_draws: list[tuple[list[int], tuple[int, int, int], str]] = []
+        processor, vit_model = get_model()
+    else:
+        processor, vit_model = model
 
-    for result in results:
-        boxes = result.boxes
-        if boxes is None or len(boxes) == 0:
-            continue
-        for box in boxes:
-            cls_id = int(box.cls[0])
-            conf = float(box.conf[0])
-            xyxy = box.xyxy[0].cpu().numpy().astype(int)
-            bbox = [int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])]
-            if cls_id == CLASS_FIRE:
-                if conf < fire_conf_threshold:
-                    continue
-                if not _is_valid_fire_box(frame, bbox, min_color_ratio):
-                    continue
-                frame_has_fire = True
-                color = (46, 87, 228)
-                label = f"FIRE {conf * 100:.0f}%"
-                etype = "FIRE"
-            elif cls_id == CLASS_SMOKE:
-                frame_has_smoke = True
-                color = (65, 164, 217)
-                label = f"SMOKE {conf * 100:.0f}%"
-                etype = "SMOKE"
-            else:
-                continue
-            detections.append({"type": etype, "confidence": round(conf, 2), "box": bbox})
-            pending_draws.append((bbox, color, label))
+    label, conf = _classify_frame(processor, vit_model, frame)
+
+    smoke_threshold = conf_threshold * 0.93
+    frame_has_fire = label == LABEL_FIRE and conf >= fire_conf_threshold
+    frame_has_smoke = label == LABEL_SMOKE and conf >= smoke_threshold
+
+    detections: list[dict] = []
+    if frame_has_fire:
+        detections.append({"type": "FIRE", "confidence": round(conf, 2), "box": [0, 0, 0, 0]})
+    elif frame_has_smoke:
+        detections.append({"type": "SMOKE", "confidence": round(conf, 2), "box": [0, 0, 0, 0]})
 
     if validator is not None:
         confirmed_fire, confirmed_smoke = validator.update(frame_has_fire, frame_has_smoke)
     else:
         confirmed_fire, confirmed_smoke = frame_has_fire, frame_has_smoke
 
-    if confirmed_fire or confirmed_smoke:
-        for bbox, color, label in pending_draws:
-            _draw_detection(frame, bbox, color, label)
-        if draw_banner:
-            _draw_banner(frame, frame.shape[1], confirmed_fire, confirmed_smoke)
+    if (confirmed_fire or confirmed_smoke) and draw_banner:
+        _draw_banner(frame, frame.shape[1], confirmed_fire, confirmed_smoke)
 
     return frame, detections, confirmed_fire, confirmed_smoke
 
@@ -261,7 +237,12 @@ def reencode_for_web(input_path: str, output_path: str) -> None:
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
         ffmpeg_exe = "ffmpeg"
-    cmd = [ffmpeg_exe, "-y", "-i", input_path, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output_path]
+    cmd = [
+        ffmpeg_exe, "-y", "-i", input_path,
+        "-c:v", "libx264", "-preset", "veryfast",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        output_path,
+    ]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 if __name__ == "__main__":

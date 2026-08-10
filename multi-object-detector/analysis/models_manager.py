@@ -56,8 +56,8 @@ def analyze_fire(frame: np.ndarray) -> tuple[np.ndarray, list[dict], bool, bool]
         return fire_detector.detect_fire_frame(
             frame,
             model=model,
-            conf_threshold=config.FIRE_CONF_THRESHOLD,
-            fire_conf_threshold=config.FIRE_ONLY_CONF_THRESHOLD,
+            conf_threshold=config.VIT_FIRE_CONF_THRESHOLD,
+            fire_conf_threshold=config.VIT_FIRE_CONF_THRESHOLD,
         )
 
 def new_danger_zone_state(polygon: np.ndarray) -> danger_zone_detector.DangerZoneState:

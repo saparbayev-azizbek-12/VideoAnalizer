@@ -14,13 +14,15 @@ DETECTORS_DIR = os.path.join(BASE_DIR, "analysis", "detectors")
 if os.path.exists(DETECTORS_DIR) and DETECTORS_DIR not in sys.path:
     sys.path.insert(0, DETECTORS_DIR)
 
-FIRE_MODEL_ONNX = os.path.join(BASE_DIR, "best.onnx")
-FIRE_MODEL_PT = os.path.join(BASE_DIR, "best.pt")
+VIT_FIRE_MODEL_DIR = os.path.join(BASE_DIR, "analysis", "models", "vit-fire-detection")
+VIT_FIRE_HF_REPO = "EdBianchi/vit-fire-detection"
 PERSON_MODEL_PATH = os.path.join(BASE_DIR, "yolov8l.pt")
 PERSON_CLASS_ID = 0
 
-FIRE_CONF_THRESHOLD = float(os.getenv("FIRE_CONF_THRESHOLD", "0.30"))
-FIRE_ONLY_CONF_THRESHOLD = float(os.getenv("FIRE_ONLY_CONF_THRESHOLD", "0.55"))
+VIT_FIRE_CONF_THRESHOLD = float(os.getenv("VIT_FIRE_CONF_THRESHOLD", "0.70"))
+VIT_SMOKE_CONF_THRESHOLD = float(os.getenv("VIT_SMOKE_CONF_THRESHOLD", "0.65"))
+FIRE_CONF_THRESHOLD = VIT_FIRE_CONF_THRESHOLD
+FIRE_ONLY_CONF_THRESHOLD = VIT_FIRE_CONF_THRESHOLD
 DANGER_ZONE_CONF_THRESHOLD = float(os.getenv("DANGER_ZONE_CONF_THRESHOLD", "0.35"))
 FALL_PERSON_CONF_THRESHOLD = float(os.getenv("FALL_PERSON_CONF_THRESHOLD", "0.40"))
 
