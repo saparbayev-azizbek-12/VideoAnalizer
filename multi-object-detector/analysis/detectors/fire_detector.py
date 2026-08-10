@@ -16,6 +16,7 @@ LABEL_FIRE = "Fire"
 LABEL_SMOKE = "Smoke"
 LABEL_NORMAL = "Normal"
 
+
 _vit_processor = None
 _vit_model = None
 

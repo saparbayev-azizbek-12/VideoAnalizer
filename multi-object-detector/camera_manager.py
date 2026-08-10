@@ -11,7 +11,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 import config
-from analysis import models_manager
+from analysis import models_manager, frame_filter
 from analysis.detectors import fall_detector, danger_zone_detector
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
@@ -216,6 +216,8 @@ class CameraWorker:
             return None
 
     def _analyze(self, frame: np.ndarray) -> np.ndarray:
+        if not frame_filter.is_frame_valid(frame):
+            return frame
         out = frame
         if models_manager.is_enabled("fire"):
             out, fire_events, _has_fire, _has_smoke = models_manager.analyze_fire(out)
