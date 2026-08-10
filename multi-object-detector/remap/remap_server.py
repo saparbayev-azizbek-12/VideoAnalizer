@@ -1,15 +1,4 @@
-"""
-remap_server.py
-----------------------------------------------------------------------
-Kamera linza distorsiyasini (Fisheye/bo'rtiqlik) to'g'rilash uchun
-FastAPI backend serveri (Visual / Slider Tuning Rejimi).
-
-Ishga tushirish (GPU/Remote Serverda):
-    uv run uvicorn remap_server:app --host 0.0.0.0 --port 8001
-"""
-
 from __future__ import annotations
-
 import os
 import cv2
 import time
@@ -33,54 +22,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ---------------------------------------------------------------------------
-# MODEL VA REQUESTLAR
-# ---------------------------------------------------------------------------
 class StartManualRequest(BaseModel):
     source: str
     k1: float = -0.15
     k2: float = 0.02
     focal_scale: float = 1.0
 
-
 class UpdateManualRequest(BaseModel):
     k1: float
     k2: float
     focal_scale: float = 1.0
 
-
 class SaveManualRequest(BaseModel):
     save_path: str = "calib.npz"
-
 
 class StartTestRequest(BaseModel):
     source: str
     calib_path: str = "calib.npz"
     alpha: float = 1.0
 
-
 class RemapManager:
     def __init__(self):
         self.lock = threading.Lock()
-        self.mode = "idle"  # "idle" | "manual" | "test"
+        self.mode = "idle"
         self.running = False
         self.thread: Optional[threading.Thread] = None
 
         self.source = ""
         self.calib_path = "calib.npz"
 
-        # Slider parameters
         self.manual_k1 = -0.15
         self.manual_k2 = 0.02
         self.manual_focal_scale = 1.0
         self.image_size: Optional[tuple[int, int]] = None
 
-        # Frame output
         self.test_frame: Optional[np.ndarray] = None
         self.last_error: Optional[str] = None
 
-        # Test mode parameters
         self.map1: Optional[np.ndarray] = None
         self.map2: Optional[np.ndarray] = None
 
@@ -94,7 +72,6 @@ class RemapManager:
             self.test_frame = None
             self.last_error = None
 
-    # ---------------------------------------------------- MANUAL TUNING --
     def start_manual_test(self, source: str, k1: float, k2: float, focal_scale: float):
         self.stop()
         with self.lock:
@@ -180,7 +157,6 @@ class RemapManager:
             left = cv2.resize(frame, (int(frame.shape[1] * scale), h_disp))
             right = cv2.resize(undistorted, (int(undistorted.shape[1] * scale), h_disp))
 
-            # Ikkala kadrga ham siljimaydigan QORA moslama to'ri (Grid lines) chizamiz:
             self._draw_grid(left)
             self._draw_grid(right)
 
@@ -200,7 +176,6 @@ class RemapManager:
 
         cap.release()
 
-    # ---------------------------------------------------------------- TEST --
     def start_test(self, source: str, calib_path: str, alpha: float):
         self.stop()
         if not os.path.exists(calib_path):
@@ -259,7 +234,6 @@ class RemapManager:
             left = cv2.resize(frame, (int(frame.shape[1] * scale), h_disp))
             right = cv2.resize(undistorted, (int(undistorted.shape[1] * scale), h_disp))
 
-            # Ikkala kadrga ham QORA moslama to'ri (Grid lines) chizamiz:
             self._draw_grid(left)
             self._draw_grid(right)
 
@@ -278,17 +252,11 @@ class RemapManager:
 
         cap.release()
 
-
 manager = RemapManager()
 
-
-# ---------------------------------------------------------------------------
-# API ENDPOINTS
-# ---------------------------------------------------------------------------
 @app.get("/api/health")
 def health():
     return {"status": "ok", "mode": manager.mode}
-
 
 @app.get("/api/status")
 def status():
@@ -301,7 +269,6 @@ def status():
             "k2": manager.manual_k2,
         }
 
-
 @app.post("/api/start_manual")
 def start_manual(req: StartManualRequest):
     try:
@@ -310,17 +277,14 @@ def start_manual(req: StartManualRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.post("/api/update_manual")
 def update_manual(req: UpdateManualRequest):
     manager.update_manual_params(req.k1, req.k2, req.focal_scale)
     return {"ok": True}
 
-
 @app.post("/api/save_manual")
 def save_manual(req: SaveManualRequest):
     return manager.save_manual_calibration(req.save_path.strip())
-
 
 @app.post("/api/start_test")
 def start_test(req: StartTestRequest):
@@ -330,12 +294,10 @@ def start_test(req: StartTestRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.post("/api/stop")
 def stop():
     manager.stop()
     return {"ok": True, "mode": "idle"}
-
 
 @app.get("/api/download_calib")
 def download_calib(filename: str = "calib.npz"):
@@ -343,10 +305,6 @@ def download_calib(filename: str = "calib.npz"):
         raise HTTPException(status_code=404, detail="Kalibratsiya fayli topilmadi")
     return FileResponse(filename, media_type="application/octet-stream", filename=os.path.basename(filename))
 
-
-# ---------------------------------------------------------------------------
-# MJPEG STREAMING ENDPOINT
-# ---------------------------------------------------------------------------
 def _gen_mjpeg_test():
     while True:
         with manager.lock:
@@ -360,13 +318,11 @@ def _gen_mjpeg_test():
                 )
         time.sleep(0.04)
 
-
 @app.get("/api/test_feed")
 def test_feed():
     return StreamingResponse(
         _gen_mjpeg_test(), media_type="multipart/x-mixed-replace; boundary=frame"
     )
-
 
 if __name__ == "__main__":
     import uvicorn

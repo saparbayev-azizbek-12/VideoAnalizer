@@ -15,8 +15,6 @@ import config
 import camera_manager
 from analysis import models_manager
 
-
-
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 app = FastAPI(title="AI Video Monitoring Server")
 
@@ -197,7 +195,6 @@ async def download_dataset():
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
-
 
 def _placeholder_tile(w: int, h: int, text: str) -> np.ndarray:
     tile = np.zeros((h, w, 3), dtype=np.uint8)

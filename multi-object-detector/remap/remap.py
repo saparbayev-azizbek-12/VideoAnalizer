@@ -1,36 +1,4 @@
-"""
-camera_calibration.py
-
-Real vaqtli kamera oqimidan checkerboard suratlarni yig'ish va shu asosida
-linza distorsiya koeffitsientlarini (camera_matrix, dist_coeffs) hisoblash,
-so'ngra ularni qo'llab kadrni to'g'irlash (undistort/remap).
-
-REJIMLAR:
-
-  1) Suratlarni yig'ish (kamera oldida checkerboard taxtani turli joy/
-     burchak/masofada ushlab, 's' tugmasi bilan saqlaysiz):
-
-     python camera_calibration.py capture --source "rtsp://user:pass@ip:554/..." \
-         --out calib_images --board 9x6
-
-     --source o'rniga USB kamera bo'lsa device index ham bo'lishi mumkin: --source 0
-
-  2) Yig'ilgan suratlardan kalibratsiyani hisoblash:
-
-     python camera_calibration.py calibrate --images calib_images \
-         --board 9x6 --square 25 --save calib.npz
-
-  3) Natijani jonli oqimda tekshirish (asl vs to'g'irlangan kadr yonma-yon):
-
-     python camera_calibration.py test --source "rtsp://..." --calib calib.npz
-
-  --board CxR  -> checkerboard ICHKI burchak nuqtalari soni (ustun x qator).
-                  Masalan 10x7 kataklik taxta uchun --board 9x6 bo'ladi.
-  --square N   -> bitta katakning haqiqiy o'lchami (mm), lineyka bilan o'lchangan.
-"""
-
 from __future__ import annotations
-
 import os
 import cv2
 import sys
@@ -38,9 +6,7 @@ import glob
 import argparse
 import numpy as np
 
-
 def _open_source(source: str) -> cv2.VideoCapture:
-    """--source ni int (USB device) yoki string (RTSP/URL) sifatida ochadi."""
     try:
         src: int | str = int(source)
     except ValueError:
@@ -50,15 +16,10 @@ def _open_source(source: str) -> cv2.VideoCapture:
         raise RuntimeError(f"Kamera manbasi ochilmadi: {source}")
     return cap
 
-
 def _parse_board(board: str) -> tuple[int, int]:
     cols_s, rows_s = board.lower().split("x")
     return int(cols_s), int(rows_s)
 
-
-# --------------------------------------------------------------------------- #
-# 1) CAPTURE
-# --------------------------------------------------------------------------- #
 def cmd_capture(args: argparse.Namespace) -> None:
     cols, rows = _parse_board(args.board)
     os.makedirs(args.out, exist_ok=True)
@@ -112,10 +73,6 @@ def cmd_capture(args: argparse.Namespace) -> None:
     if idx < 15:
         print("Ogohlantirish: kamida 15-20 ta surat tavsiya etiladi, ayniqsa kadr chekkalarida.")
 
-
-# --------------------------------------------------------------------------- #
-# 2) CALIBRATE
-# --------------------------------------------------------------------------- #
 def cmd_calibrate(args: argparse.Namespace) -> None:
     cols, rows = _parse_board(args.board)
     square = args.square
@@ -183,10 +140,6 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
              mean_error=mean_error)
     print(f"Saqlandi: {args.save}")
 
-
-# --------------------------------------------------------------------------- #
-# 3) TEST (live undistort)
-# --------------------------------------------------------------------------- #
 def cmd_test(args: argparse.Namespace) -> None:
     data = np.load(args.calib)
     camera_matrix = data["camera_matrix"]
@@ -222,10 +175,8 @@ def cmd_test(args: argparse.Namespace) -> None:
     cap.release()
     cv2.destroyAllWindows()
 
-
-# --------------------------------------------------------------------------- #
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description="Camera calibration", formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_cap = sub.add_parser("capture", help="Checkerboard suratlarni yig'ish")
@@ -250,7 +201,6 @@ def main() -> None:
 
     args = parser.parse_args()
     args.func(args)
-
 
 if __name__ == "__main__":
     main()
