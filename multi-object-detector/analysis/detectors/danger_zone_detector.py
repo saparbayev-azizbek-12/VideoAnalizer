@@ -33,7 +33,7 @@ class DangerZoneState:
         self.zone = sv.PolygonZone(polygon=polygon)
         self.zone_annotator = sv.PolygonZoneAnnotator(zone=self.zone, color=sv.Color.RED, thickness=2)
 
-    def analyze(self, frame: np.ndarray, conf: float = 0.35) -> tuple[np.ndarray, int, bool]:
+    def analyze(self, frame: np.ndarray, conf: float = 0.35, draw_boxes: bool = True) -> tuple[np.ndarray, int, bool]:
         result = self.model(frame, conf=conf, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
         people = detections[detections.class_id == PERSON_CLASS_ID]
@@ -42,7 +42,7 @@ class DangerZoneState:
         breach = people_in_zone > 0
 
         annotated = self.zone_annotator.annotate(scene=frame)
-        if len(people) > 0:
+        if draw_boxes and len(people) > 0:
             labels = [f"person {c:.2f}" for c in people.confidence]
             annotated = self.box_annotator.annotate(scene=annotated, detections=people)
             annotated = self.label_annotator.annotate(scene=annotated, detections=people, labels=labels)

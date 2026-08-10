@@ -65,7 +65,15 @@ def new_danger_zone_state(polygon: np.ndarray) -> danger_zone_detector.DangerZon
     return danger_zone_detector.DangerZoneState(polygon=polygon, model=get_zone_person_model())
 
 def analyze_danger_zone(
-    state: danger_zone_detector.DangerZoneState, frame: np.ndarray
+    state: danger_zone_detector.DangerZoneState,
+    frame: np.ndarray,
+    draw_boxes: bool | None = None,
 ) -> tuple[np.ndarray, int, bool]:
+    if draw_boxes is None:
+        draw_boxes = not is_enabled("fall")
     with _zone_infer_lock:
-        return state.analyze(frame, conf=config.DANGER_ZONE_CONF_THRESHOLD)
+        return state.analyze(
+            frame,
+            conf=config.DANGER_ZONE_CONF_THRESHOLD,
+            draw_boxes=draw_boxes,
+        )
