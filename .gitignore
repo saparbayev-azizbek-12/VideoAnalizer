@@ -9,7 +9,6 @@ __pycache__
 uv.lock
 
 *.jpg
-*.json
 multi-object-detector/dataset
 
 form-detection/
