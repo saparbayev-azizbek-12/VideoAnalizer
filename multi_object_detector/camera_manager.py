@@ -259,6 +259,25 @@ class CameraWorker:
                         extra["image"] = snap
                     self._log_event("danger_zone", f"Xavfli hududda {people_in_zone} kishi aniqlandi", **extra)
 
+        if models_manager.is_enabled("ppe"):
+            out, ppe_violations, has_ppe_violation = models_manager.analyze_ppe(out)
+            if has_ppe_violation:
+                snap = self._save_dataset_snapshot("ppe", out, {"violation_count": len(ppe_violations)})
+                for i, viol in enumerate(ppe_violations):
+                    extra = dict(
+                        box=viol["box"],
+                        confidence=viol["confidence"],
+                        missing=viol["missing"],
+                        type=viol["type"],
+                    )
+                    if snap and i == 0:
+                        extra["image"] = snap
+                    missing_str = ", ".join(
+                        "Kask" if m == "Safety Helmet" else "Xavfsizlik kiyimi"
+                        for m in viol["missing"]
+                    )
+                    self._log_event("ppe", f"PPE yo'q: {missing_str}", **extra)
+
         return out
 
 _cameras: dict[str, CameraWorker] = {}

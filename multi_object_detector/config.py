@@ -18,6 +18,7 @@ VIT_FIRE_MODEL_DIR = os.path.join(BASE_DIR, "analysis", "models", "vit-fire-dete
 VIT_FIRE_HF_REPO = "EdBianchi/vit-fire-detection"
 PERSON_MODEL_PATH = os.path.join(BASE_DIR, "analysis", "models", "yolov8l.pt")
 PERSON_CLASS_ID = 0
+PPE_MODEL_PATH = os.path.join(BASE_DIR, "analysis", "models", "sfchd_yolov8s.pt")
 
 VIT_FIRE_CONF_THRESHOLD = float(os.getenv("VIT_FIRE_CONF_THRESHOLD", "0.70"))
 VIT_SMOKE_CONF_THRESHOLD = float(os.getenv("VIT_SMOKE_CONF_THRESHOLD", "0.65"))
@@ -25,21 +26,24 @@ FIRE_CONF_THRESHOLD = VIT_FIRE_CONF_THRESHOLD
 FIRE_ONLY_CONF_THRESHOLD = VIT_FIRE_CONF_THRESHOLD
 DANGER_ZONE_CONF_THRESHOLD = float(os.getenv("DANGER_ZONE_CONF_THRESHOLD", "0.35"))
 FALL_PERSON_CONF_THRESHOLD = float(os.getenv("FALL_PERSON_CONF_THRESHOLD", "0.40"))
+PPE_CONF_THRESHOLD = float(os.getenv("PPE_CONF_THRESHOLD", "0.40"))
 
 ANALYSIS_EVERY_N_FRAMES = 1
 
-MODEL_IDS = ("fire", "fall", "danger_zone")
+MODEL_IDS = ("fire", "fall", "danger_zone", "ppe")
 
 MODEL_LABELS = {
     "fire": "🔥 Yong'in / Tutun",
     "fall": "🚨 Yiqilib tushish",
     "danger_zone": "⛔ Xavfli hudud",
+    "ppe": "🦺 PPE / Xavfsizlik kiyimi",
 }
 
 MODEL_DEFAULT_ENABLED = {
     "fire": True,
     "fall": True,
     "danger_zone": True,
+    "ppe": True,
 }
 
 CAMERA_RECONNECT_DELAY_SEC = 2.0

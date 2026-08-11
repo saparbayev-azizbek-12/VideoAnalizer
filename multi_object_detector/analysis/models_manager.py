@@ -3,7 +3,7 @@ import threading
 import numpy as np
 from ultralytics import YOLO
 from multi_object_detector import config
-from multi_object_detector.analysis.detectors import fire_detector, danger_zone_detector
+from multi_object_detector.analysis.detectors import fire_detector, danger_zone_detector, ppe_detector
 
 _state_lock = threading.Lock()
 _enabled: dict[str, bool] = dict(config.MODEL_DEFAULT_ENABLED)
@@ -30,6 +30,10 @@ _zone_person_model = None
 _zone_model_lock = threading.Lock()
 _zone_infer_lock = threading.Lock()
 
+_ppe_model = None
+_ppe_model_lock = threading.Lock()
+_ppe_infer_lock = threading.Lock()
+
 def get_fire_model():
     global _fire_model
     with _fire_model_lock:
@@ -44,9 +48,17 @@ def get_zone_person_model():
             _zone_person_model = YOLO(config.PERSON_MODEL_PATH)
     return _zone_person_model
 
+def get_ppe_model() -> YOLO:
+    global _ppe_model
+    with _ppe_model_lock:
+        if _ppe_model is None:
+            _ppe_model = ppe_detector.get_model()
+    return _ppe_model
+
 def preload_all() -> None:
     get_fire_model()
     get_zone_person_model()
+    get_ppe_model()
 
 def analyze_fire(frame: np.ndarray) -> tuple[np.ndarray, list[dict], bool, bool]:
     model = get_fire_model()
@@ -73,4 +85,13 @@ def analyze_danger_zone(
             frame,
             conf=config.DANGER_ZONE_CONF_THRESHOLD,
             draw_boxes=draw_boxes,
+        )
+
+def analyze_ppe(frame: np.ndarray) -> tuple[np.ndarray, list[dict], bool]:
+    model = get_ppe_model()
+    with _ppe_infer_lock:
+        return ppe_detector.analyze_ppe_frame(
+            frame,
+            model=model,
+            conf=config.PPE_CONF_THRESHOLD,
         )

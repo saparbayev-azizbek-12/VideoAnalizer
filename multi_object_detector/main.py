@@ -9,7 +9,7 @@ from PIL import Image, ImageTk
 from multi_object_detector import config
 from tkinter import messagebox, filedialog
 
-MODEL_ICONS = {"fire": "🔥", "fall": "🚨", "danger_zone": "⛔"}
+MODEL_ICONS = {"fire": "🔥", "fall": "🚨", "danger_zone": "⛔", "ppe": "🦺"}
 
 class CameraPopout(tk.Toplevel):
     def __init__(self, app: "MonitoringApp", cam_id: str, cam_name: str):
