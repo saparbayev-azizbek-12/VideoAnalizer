@@ -8,13 +8,13 @@ from collections import deque
 from typing import Callable, Optional
 from dataclasses import dataclass, field
 
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 VIT_MODEL_DIR = BASE_DIR / "analysis" / "models" / "vit-fire-detection"
 
 LABEL_FIRE = "Fire"
 LABEL_SMOKE = "Smoke"
 LABEL_NORMAL = "Normal"
-
 
 _vit_processor = None
 _vit_model = None

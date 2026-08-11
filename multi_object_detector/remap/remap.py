@@ -6,6 +6,7 @@ import glob
 import argparse
 import numpy as np
 
+
 def _open_source(source: str) -> cv2.VideoCapture:
     try:
         src: int | str = int(source)
