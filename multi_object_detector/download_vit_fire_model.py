@@ -13,7 +13,8 @@ MODEL_DIR = BASE_DIR / "analysis" / "models" / "vit-fire-detection"
 HF_REPO = "EdBianchi/vit-fire-detection"
 
 def main() -> None:
-    if MODEL_DIR.exists() and (MODEL_DIR / "config.json").exists():
+    bin_file = MODEL_DIR / "pytorch_model.bin"
+    if MODEL_DIR.exists() and bin_file.exists() and bin_file.stat().st_size > 10_000_000:
         print(f"Model allaqachon mavjud: {MODEL_DIR}")
         return
 

@@ -18,13 +18,21 @@ LABEL_NORMAL = "Normal"
 
 _vit_processor = None
 _vit_model = None
+HF_REPO = "EdBianchi/vit-fire-detection"
+
+def _get_model_source() -> str:
+    bin_file = VIT_MODEL_DIR / "pytorch_model.bin"
+    if VIT_MODEL_DIR.exists() and bin_file.exists() and bin_file.stat().st_size > 10_000_000:
+        return str(VIT_MODEL_DIR)
+    return HF_REPO
 
 def get_model():
     global _vit_processor, _vit_model
     if _vit_processor is None or _vit_model is None:
         from transformers import ViTForImageClassification, ViTImageProcessor
-        _vit_processor = ViTImageProcessor.from_pretrained(str(VIT_MODEL_DIR))
-        _vit_model = ViTForImageClassification.from_pretrained(str(VIT_MODEL_DIR))
+        source = _get_model_source()
+        _vit_processor = ViTImageProcessor.from_pretrained(source)
+        _vit_model = ViTForImageClassification.from_pretrained(source)
         _vit_model.eval()
         try:
             import torch
