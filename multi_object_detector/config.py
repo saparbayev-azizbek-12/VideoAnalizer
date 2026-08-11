@@ -16,7 +16,7 @@ if os.path.exists(DETECTORS_DIR) and DETECTORS_DIR not in sys.path:
 
 VIT_FIRE_MODEL_DIR = os.path.join(BASE_DIR, "analysis", "models", "vit-fire-detection")
 VIT_FIRE_HF_REPO = "EdBianchi/vit-fire-detection"
-PERSON_MODEL_PATH = os.path.join(BASE_DIR, "yolov8l.pt")
+PERSON_MODEL_PATH = os.path.join(BASE_DIR, "analysis", "models", "yolov8l.pt")
 PERSON_CLASS_ID = 0
 
 VIT_FIRE_CONF_THRESHOLD = float(os.getenv("VIT_FIRE_CONF_THRESHOLD", "0.70"))

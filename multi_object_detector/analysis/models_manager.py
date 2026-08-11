@@ -1,10 +1,9 @@
 from __future__ import annotations
 import threading
 import numpy as np
-
-import config
-import fire_detector
-import danger_zone_detector
+from ultralytics import YOLO
+from multi_object_detector import config
+from multi_object_detector.analysis.detectors import fire_detector, danger_zone_detector
 
 _state_lock = threading.Lock()
 _enabled: dict[str, bool] = dict(config.MODEL_DEFAULT_ENABLED)
@@ -42,7 +41,6 @@ def get_zone_person_model():
     global _zone_person_model
     with _zone_model_lock:
         if _zone_person_model is None:
-            from ultralytics import YOLO
             _zone_person_model = YOLO(config.PERSON_MODEL_PATH)
     return _zone_person_model
 

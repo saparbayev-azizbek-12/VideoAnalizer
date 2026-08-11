@@ -4,13 +4,12 @@ import cv2
 import subprocess
 import numpy as np
 from pathlib import Path
+from collections import deque
 from typing import Callable, Optional
 from dataclasses import dataclass, field
-from collections import deque
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 VIT_MODEL_DIR = BASE_DIR / "analysis" / "models" / "vit-fire-detection"
-VIT_HF_REPO = "EdBianchi/vit-fire-detection"
 
 LABEL_FIRE = "Fire"
 LABEL_SMOKE = "Smoke"
@@ -20,31 +19,9 @@ LABEL_NORMAL = "Normal"
 _vit_processor = None
 _vit_model = None
 
-def _ensure_model_downloaded() -> None:
-    if VIT_MODEL_DIR.exists() and (VIT_MODEL_DIR / "config.json").exists():
-        return
-    print(f"ViT fire detection modeli yuklanmoqda: {VIT_HF_REPO} -> {VIT_MODEL_DIR}")
-    try:
-        from huggingface_hub import snapshot_download
-        snapshot_download(
-            repo_id=VIT_HF_REPO,
-            local_dir=str(VIT_MODEL_DIR),
-            ignore_patterns=["*.ot", "flax_model*", "tf_model*", "rust_model*"],
-        )
-        print("Model muvaffaqiyatli yuklandi.")
-    except Exception as e:
-        raise RuntimeError(
-            f"ViT fire detection modelini yuklab bo'lmadi: {e}\n"
-            f"Modelni qo'lda yuklab {VIT_MODEL_DIR} papkasiga joylashtiring:\n"
-            f"  pip install huggingface_hub\n"
-            f"  python -c \"from huggingface_hub import snapshot_download; "
-            f"snapshot_download('{VIT_HF_REPO}', local_dir='{VIT_MODEL_DIR}')\""
-        ) from e
-
 def get_model():
     global _vit_processor, _vit_model
     if _vit_processor is None or _vit_model is None:
-        _ensure_model_downloaded()
         from transformers import ViTForImageClassification, ViTImageProcessor
         _vit_processor = ViTImageProcessor.from_pretrained(str(VIT_MODEL_DIR))
         _vit_model = ViTForImageClassification.from_pretrained(str(VIT_MODEL_DIR))

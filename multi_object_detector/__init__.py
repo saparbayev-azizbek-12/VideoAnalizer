@@ -1,0 +1,1 @@
+"""Multi-object detector package."""

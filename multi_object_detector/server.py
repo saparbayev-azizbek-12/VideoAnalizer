@@ -11,9 +11,9 @@ from fastapi.responses import Response
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-import config
-import camera_manager
-from analysis import models_manager
+from multi_object_detector import config
+from multi_object_detector import camera_manager
+from multi_object_detector.analysis import models_manager
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 app = FastAPI(title="AI Video Monitoring Server")

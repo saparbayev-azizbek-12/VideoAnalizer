@@ -8,8 +8,9 @@ import numpy as np
 import supervision as sv
 from typing import Optional
 from ultralytics import YOLO
+from multi_object_detector import config
 
-PERSON_CLASS_ID = 0
+PERSON_CLASS_ID = config.PERSON_CLASS_ID
 
 def load_zone(zone_path: str) -> np.ndarray:
     with open(zone_path, "r", encoding="utf-8") as f:
@@ -21,7 +22,7 @@ def load_zone(zone_path: str) -> np.ndarray:
 
 class DangerZoneState:
     def __init__(self, polygon: np.ndarray, model: Optional[YOLO] = None):
-        self.model = model or YOLO("yolov8l.pt")
+        self.model = model or YOLO(config.PERSON_MODEL_PATH)
         self.polygon = polygon
         self.zone = sv.PolygonZone(polygon=polygon)
         self.zone_annotator = sv.PolygonZoneAnnotator(zone=self.zone, color=sv.Color.RED, thickness=2)
@@ -59,7 +60,7 @@ def main():
     parser.add_argument("--video", required=True, help="Kirish video fayli")
     parser.add_argument("--zone", required=True, help="select_zone.py orqali saqlangan zone.json")
     parser.add_argument("--output", default="output.mp4", help="Chiqish (annotatsiyalangan) video")
-    parser.add_argument("--model", default="yolov8l.pt", help="Ultralytics YOLO model fayli")
+    parser.add_argument("--model", default=config.PERSON_MODEL_PATH, help="Ultralytics YOLO model fayli")
     parser.add_argument("--conf", type=float, default=0.35, help="Aniqlash ishonch chegarasi")
     parser.add_argument("--show", action="store_true", help="Jonli oynada ko'rsatish")
     parser.add_argument("--log", default="danger_log.csv", help="Buzilishlar logi (CSV)")

@@ -11,25 +11,14 @@ from ultralytics import YOLO
 from collections import deque
 from typing import Callable, Optional
 from dataclasses import dataclass, field
-
-import config
+from multi_object_detector import config
 
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 
 _YOLO_MODEL: Optional[YOLO] = None
 BASE_DIR = Path(__file__).resolve().parent.parent
-LOCAL_MODEL_PATH = str(BASE_DIR / "models" / "yolov8l.pt")
 LOCAL_CALIB_PATH = str(BASE_DIR / "models" / "calib.npz")
-
-def _get_person_model_path(custom_path: Optional[str] = None) -> str:
-    if custom_path and os.path.exists(custom_path):
-        return custom_path
-    if hasattr(config, "PERSON_MODEL_PATH") and os.path.exists(config.PERSON_MODEL_PATH):
-        return config.PERSON_MODEL_PATH
-    if os.path.exists(LOCAL_MODEL_PATH):
-        return LOCAL_MODEL_PATH
-    return "yolov8l.pt"
 
 def _get_calib_path(custom_path: Optional[str] = None) -> Optional[str]:
     if custom_path and os.path.exists(custom_path):
@@ -138,7 +127,7 @@ def is_pose_reliable(landmarks) -> bool:
 def get_model() -> YOLO:
     global _YOLO_MODEL
     if _YOLO_MODEL is None:
-        _YOLO_MODEL = YOLO(_get_person_model_path())
+        _YOLO_MODEL = YOLO(config.PERSON_MODEL_PATH)
     return _YOLO_MODEL
 
 def calculate_angle(hip_center: tuple[float, float], shoulder_center: tuple[float, float]) -> float:
@@ -353,9 +342,6 @@ def process_video(
     cap.release()
     out.release()
     return ProcessingResult(output_path=output_path, fps=fps, width=width, height=height, total_frames=frame_idx, fall_detected=len(fall_events) > 0, fall_events=fall_events)
-
-def create_tracking_model(model_path: str = "yolov8l.pt") -> YOLO:
-    return YOLO(model_path)
 
 def create_pose_instance():
     return mp_pose.Pose(

@@ -1,12 +1,12 @@
 from __future__ import annotations
 import cv2
 import time
-import config
 import requests
 import threading
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageTk
+from multi_object_detector import config
 from tkinter import messagebox, filedialog
 
 MODEL_ICONS = {"fire": "🔥", "fall": "🚨", "danger_zone": "⛔"}
