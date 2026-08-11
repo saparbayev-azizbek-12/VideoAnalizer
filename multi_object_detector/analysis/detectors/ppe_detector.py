@@ -134,9 +134,9 @@ def analyze_ppe_frame(
         x1, y1, x2, y2 = map(int, p_box)
 
         if missing:
-            # PPE YO'Q → qizil
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_VIOLATE, 2)
-            label = "NO PPE: " + ", ".join(
+            # PPE YO'Q → qizil, qalin chiziq
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_VIOLATE, 3)
+            label = "⚠ NO PPE: " + ", ".join(
                 "Helmet" if m == CLASS_SAFETY_HELMET else "Clothing"
                 for m in missing
             )
@@ -148,21 +148,25 @@ def analyze_ppe_frame(
                 "type": "ppe_violation",
             })
         else:
-            # PPE bor → yashil
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_OK, 2)
-            _draw_label(annotated, "PPE OK", x1, y1, COLOR_OK)
+            # PPE bor → yashil, qalin chiziq
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_OK, 3)
+            _draw_label(annotated, "✓ PPE OK", x1, y1, COLOR_OK)
 
-    # Boshqa aniqlangan obyektlarni ingichka chiziq bilan ko'rsatish
+    # Boshqa aniqlangan obyektlarni ko'rsatish (kask, kiyim, boshqalar)
     for box, cf, name in all_detections:
         if name in PERSON_LIKE_CLASSES:
             continue
         x1, y1, x2, y2 = map(int, box)
-        color = COLOR_OK if name in REQUIRED_PPE_CLASSES else (180, 180, 180)
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 1)
+        color = COLOR_OK if name in REQUIRED_PPE_CLASSES else (200, 200, 200)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        lbl = f"{name} {cf:.2f}"
+        (tw, th), bl = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        ty = max(th + 4, y1)
+        cv2.rectangle(annotated, (x1, ty - th - 6), (x1 + tw + 6, ty + bl + 2), color, -1)
         cv2.putText(
-            annotated, f"{name} {cf:.2f}",
-            (x1, max(0, y1 - 4)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA
+            annotated, lbl,
+            (x1 + 3, ty - 2),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA
         )
 
     # ── Alarm banneri ─────────────────────────────────────────────────────────
@@ -180,10 +184,15 @@ def analyze_ppe_frame(
 
 
 def _draw_label(img: np.ndarray, text: str, x: int, y: int, color: tuple) -> None:
-    """Matn uchun to'ldirilgan fon bilan label chizish."""
+    """Matn uchun to'ldirilgan fon bilan label chizish (katta va ko'rimsiz)."""
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale, thick = 0.5, 1
+    scale, thick = 0.7, 2          # avvalgi 0.5, 1 dan kattaroq
     (tw, th), baseline = cv2.getTextSize(text, font, scale, thick)
-    ty = max(th + 4, y)
-    cv2.rectangle(img, (x, ty - th - 4), (x + tw + 4, ty + baseline), color, -1)
-    cv2.putText(img, text, (x + 2, ty - 2), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
+    pad = 6
+    ty = max(th + pad + 2, y)      # label yuqoriga chiqmasligi uchun
+    # Fon to'rtburchak
+    cv2.rectangle(img, (x, ty - th - pad), (x + tw + pad * 2, ty + baseline + 2), color, -1)
+    # Qora chegara
+    cv2.rectangle(img, (x, ty - th - pad), (x + tw + pad * 2, ty + baseline + 2), (0, 0, 0), 1)
+    # Oq matn
+    cv2.putText(img, text, (x + pad, ty - 2), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
