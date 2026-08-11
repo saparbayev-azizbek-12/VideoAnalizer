@@ -9,6 +9,7 @@ from PIL import Image, ImageTk
 from multi_object_detector import config
 from tkinter import messagebox, filedialog
 
+
 MODEL_ICONS = {"fire": "🔥", "fall": "🚨", "danger_zone": "⛔", "ppe": "🦺"}
 
 class CameraPopout(tk.Toplevel):
@@ -57,7 +58,6 @@ class CameraPopout(tk.Toplevel):
             new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
             resized = cv2.resize(frame, (new_w, new_h))
             rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(rgb)
             self._photo_ref = ImageTk.PhotoImage(image=Image.fromarray(rgb))
             self.label.config(image=self._photo_ref)
         self.after(config.POPOUT_UPDATE_MS, self._refresh)

@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import cv2
 import numpy as np
 from typing import Optional
@@ -7,31 +6,29 @@ from ultralytics import YOLO
 from dataclasses import dataclass
 from multi_object_detector import config
 
-
-CLASS_PERSON           = "Person"
-CLASS_SAFETY_HELMET    = "Safety Helmet"
-CLASS_SAFETY_CLOTHING  = "Safety Clothing"
-CLASS_OTHER_CLOTHING   = "Other Clothing"
-CLASS_HEAD             = "Head"
+CLASS_PERSON = "Person"
+CLASS_SAFETY_HELMET = "Safety Helmet"
+CLASS_SAFETY_CLOTHING = "Safety Clothing"
+CLASS_OTHER_CLOTHING = "Other Clothing"
+CLASS_HEAD = "Head"
 CLASS_BLURRED_CLOTHING = "Blurred Clothing"
-CLASS_BLURRED_HEAD     = "Blurred Head"
+CLASS_BLURRED_HEAD = "Blurred Head"
 
-REQUIRED_PPE_CLASSES = {CLASS_SAFETY_HELMET, CLASS_BLURRED_CLOTHING}
-PERSON_LIKE_CLASSES = {CLASS_PERSON, CLASS_BLURRED_HEAD}
+REQUIRED_PPE_CLASSES = {CLASS_SAFETY_HELMET, CLASS_SAFETY_CLOTHING}
+PERSON_LIKE_CLASSES = {CLASS_PERSON}
+IGNORED_CLASSES = {CLASS_HEAD, CLASS_BLURRED_HEAD}
 
-COLOR_OK      = (0, 200, 60)
+COLOR_OK = (0, 200, 60)
 COLOR_VIOLATE = (0, 40, 220)
-COLOR_BANNER  = (0, 0, 180)
+COLOR_BANNER = (0, 0, 180)
 
 _ppe_model: Optional[YOLO] = None
-
 
 def get_model() -> YOLO:
     global _ppe_model
     if _ppe_model is None:
         _ppe_model = YOLO(config.PPE_MODEL_PATH)
     return _ppe_model
-
 
 @dataclass
 class PPEViolation:
@@ -51,36 +48,36 @@ def _iou(boxA: list[float], boxB: list[float]) -> float:
     areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
     return inter / (areaA + areaB - inter + 1e-6)
 
-
 def analyze_ppe_frame(
     frame: np.ndarray,
     model: Optional[YOLO] = None,
     conf: float = 0.40,
     iou_match_thresh: float = 0.10,
 ) -> tuple[np.ndarray, list[dict], bool]:
-
     if model is None:
         model = get_model()
 
     result = model(frame, conf=conf, verbose=False)[0]
     annotated = frame.copy()
-    names: dict[int, str] = result.names 
+    names: dict[int, str] = result.names
     if result.boxes is None or len(result.boxes) == 0:
         return annotated, [], False
 
     boxes_xyxy = result.boxes.xyxy.cpu().numpy()
-    confs      = result.boxes.conf.cpu().numpy() 
-    class_ids  = result.boxes.cls.cpu().numpy().astype(int)
+    confs = result.boxes.conf.cpu().numpy()
+    class_ids = result.boxes.cls.cpu().numpy().astype(int)
 
     person_like: list[tuple[np.ndarray, float]] = []
     ppe_boxes: dict[str, list[np.ndarray]] = {
-        CLASS_SAFETY_HELMET:    [],
-        CLASS_SAFETY_CLOTHING:  [],
+        CLASS_SAFETY_HELMET: [],
+        CLASS_SAFETY_CLOTHING: [],
     }
     all_detections: list[tuple[np.ndarray, float, str]] = []
 
     for box, cf, cid in zip(boxes_xyxy, confs, class_ids):
         name = names.get(cid, "")
+        if name in IGNORED_CLASSES:
+            continue
         all_detections.append((box, float(cf), name))
         if name in PERSON_LIKE_CLASSES:
             person_like.append((box, float(cf)))
@@ -146,14 +143,12 @@ def analyze_ppe_frame(
 
     return annotated, violations, has_violation
 
-
 def _draw_label(img: np.ndarray, text: str, x: int, y: int, color: tuple) -> None:
-    """Matn uchun to'ldirilgan fon bilan label chizish (katta va ko'rimsiz)."""
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale, thick = 0.7, 2
     (tw, th), baseline = cv2.getTextSize(text, font, scale, thick)
     pad = 6
-    ty = max(th + pad + 2, y) 
+    ty = max(th + pad + 2, y)
     cv2.rectangle(img, (x, ty - th - pad), (x + tw + pad * 2, ty + baseline + 2), color, -1)
     cv2.rectangle(img, (x, ty - th - pad), (x + tw + pad * 2, ty + baseline + 2), (0, 0, 0), 1)
     cv2.putText(img, text, (x + pad, ty - 2), font, scale, (255, 255, 255), thick, cv2.LINE_AA)

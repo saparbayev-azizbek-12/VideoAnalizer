@@ -10,7 +10,6 @@ from pydantic import BaseModel
 from fastapi.responses import Response
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-
 from multi_object_detector import config
 from multi_object_detector import camera_manager
 from multi_object_detector.analysis import models_manager

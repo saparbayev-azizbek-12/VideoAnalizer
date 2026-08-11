@@ -1,12 +1,7 @@
-"""
-ViT fire detection modelini HuggingFace Hub'dan local papkaga yuklab olish.
-
-Foydalanish:
-    uv run python download_vit_fire_model.py
-"""
 from __future__ import annotations
 import sys
 from pathlib import Path
+
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "analysis" / "models" / "vit-fire-detection"

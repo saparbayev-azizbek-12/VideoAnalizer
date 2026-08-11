@@ -13,6 +13,7 @@ from typing import Callable, Optional
 from dataclasses import dataclass, field
 from multi_object_detector import config
 
+
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 

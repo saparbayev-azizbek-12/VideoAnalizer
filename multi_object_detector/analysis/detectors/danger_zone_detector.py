@@ -11,6 +11,7 @@ from typing import Optional
 from ultralytics import YOLO
 from multi_object_detector import config
 
+
 PERSON_CLASS_ID = config.PERSON_CLASS_ID
 
 def load_zone(zone_path: str) -> np.ndarray:
