@@ -1,25 +1,13 @@
-"""
-PPE (Personal Protective Equipment) detektor.
-
-sfchd_yolov8s.pt modeli yordamida xavfsizlik jihozlarini (kask, kiyim) aniqlaydi.
-Kadrda kask yoki xavfsizlik kiyimi kiyilmagan odam aniqlansa alarm beradi.
-
-Sinf nomlari (model.names):
-    Person, Safety Helmet, Safety Clothing, Other Clothing,
-    Head, Blurred Clothing, Blurred Head
-"""
 from __future__ import annotations
 
 import cv2
 import numpy as np
-from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass, field
-from collections import deque
 from ultralytics import YOLO
+from dataclasses import dataclass
 from multi_object_detector import config
 
-# ── Model sinf nomlari ─────────────────────────────────────────────────────────
+
 CLASS_PERSON           = "Person"
 CLASS_SAFETY_HELMET    = "Safety Helmet"
 CLASS_SAFETY_CLOTHING  = "Safety Clothing"
@@ -28,18 +16,13 @@ CLASS_HEAD             = "Head"
 CLASS_BLURRED_CLOTHING = "Blurred Clothing"
 CLASS_BLURRED_HEAD     = "Blurred Head"
 
-# Alarm beradigan sinflar (bunlar yo'q bo'lsa xavfli)
-REQUIRED_PPE_CLASSES = {CLASS_SAFETY_HELMET, CLASS_SAFETY_CLOTHING}
+REQUIRED_PPE_CLASSES = {CLASS_SAFETY_HELMET, CLASS_BLURRED_CLOTHING}
+PERSON_LIKE_CLASSES = {CLASS_PERSON, CLASS_BLURRED_HEAD}
 
-# "Odam bor" deb hisoblanadigan sinflar
-PERSON_LIKE_CLASSES = {CLASS_PERSON, CLASS_HEAD, CLASS_BLURRED_HEAD}
+COLOR_OK      = (0, 200, 60)
+COLOR_VIOLATE = (0, 40, 220)
+COLOR_BANNER  = (0, 0, 180)
 
-# ── Ranglar ────────────────────────────────────────────────────────────────────
-COLOR_OK      = (0, 200, 60)     # Yashil: PPE mavjud
-COLOR_VIOLATE = (0, 40, 220)     # Qizil: PPE yo'q
-COLOR_BANNER  = (0, 0, 180)      # Qizil: banner fon
-
-# ── Singleton model ────────────────────────────────────────────────────────────
 _ppe_model: Optional[YOLO] = None
 
 
@@ -50,16 +33,12 @@ def get_model() -> YOLO:
     return _ppe_model
 
 
-# ── Natija tuzilmasi ──────────────────────────────────────────────────────────
 @dataclass
 class PPEViolation:
-    """Bitta "PPE yo'q" hodisasi."""
-    box: list[int]          # [x1, y1, x2, y2]
+    box: list[int]
     confidence: float
-    missing: list[str]      # yo'q jihozlar ro'yxati (masalan, ["Safety Helmet"])
+    missing: list[str]
 
-
-# ── Yordamchi: IoU hisoblash ──────────────────────────────────────────────────
 def _iou(boxA: list[float], boxB: list[float]) -> float:
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
@@ -73,42 +52,32 @@ def _iou(boxA: list[float], boxB: list[float]) -> float:
     return inter / (areaA + areaB - inter + 1e-6)
 
 
-# ── Asosiy tahlil funksiyasi ──────────────────────────────────────────────────
 def analyze_ppe_frame(
     frame: np.ndarray,
     model: Optional[YOLO] = None,
     conf: float = 0.40,
     iou_match_thresh: float = 0.10,
 ) -> tuple[np.ndarray, list[dict], bool]:
-    """
-    Kadrda PPE aniqlash.
 
-    Returns:
-        annotated_frame  — annotatsiya qilingan kadr
-        violations       — [{box, confidence, missing, type}] ro'yxati
-        has_violation    — kamida 1 ta qoidabuzarlik bor/yo'qligi
-    """
     if model is None:
         model = get_model()
 
     result = model(frame, conf=conf, verbose=False)[0]
     annotated = frame.copy()
-    names: dict[int, str] = result.names  # {0: "Person", 1: "Safety Helmet", ...}
-
+    names: dict[int, str] = result.names 
     if result.boxes is None or len(result.boxes) == 0:
         return annotated, [], False
 
-    boxes_xyxy = result.boxes.xyxy.cpu().numpy()       # (N, 4)
-    confs      = result.boxes.conf.cpu().numpy()       # (N,)
-    class_ids  = result.boxes.cls.cpu().numpy().astype(int)  # (N,)
+    boxes_xyxy = result.boxes.xyxy.cpu().numpy()
+    confs      = result.boxes.conf.cpu().numpy() 
+    class_ids  = result.boxes.cls.cpu().numpy().astype(int)
 
-    # Natijalarni sinflarga ajratish
-    person_like: list[tuple[np.ndarray, float]] = []   # [(box, conf), ...]
+    person_like: list[tuple[np.ndarray, float]] = []
     ppe_boxes: dict[str, list[np.ndarray]] = {
         CLASS_SAFETY_HELMET:    [],
         CLASS_SAFETY_CLOTHING:  [],
     }
-    all_detections: list[tuple[np.ndarray, float, str]] = []  # (box, conf, name)
+    all_detections: list[tuple[np.ndarray, float, str]] = []
 
     for box, cf, cid in zip(boxes_xyxy, confs, class_ids):
         name = names.get(cid, "")
@@ -118,7 +87,6 @@ def analyze_ppe_frame(
         elif name in ppe_boxes:
             ppe_boxes[name].append(box)
 
-    # ── Har bir "odam" uchun PPE tekshirish ──────────────────────────────────
     violations: list[dict] = []
 
     for p_box, p_conf in person_like:
@@ -134,7 +102,6 @@ def analyze_ppe_frame(
         x1, y1, x2, y2 = map(int, p_box)
 
         if missing:
-            # PPE YO'Q → qizil, qalin chiziq
             cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_VIOLATE, 3)
             label = "⚠ NO PPE: " + ", ".join(
                 "Helmet" if m == CLASS_SAFETY_HELMET else "Clothing"
@@ -148,11 +115,9 @@ def analyze_ppe_frame(
                 "type": "ppe_violation",
             })
         else:
-            # PPE bor → yashil, qalin chiziq
             cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_OK, 3)
             _draw_label(annotated, "✓ PPE OK", x1, y1, COLOR_OK)
 
-    # Boshqa aniqlangan obyektlarni ko'rsatish (kask, kiyim, boshqalar)
     for box, cf, name in all_detections:
         if name in PERSON_LIKE_CLASSES:
             continue
@@ -169,7 +134,6 @@ def analyze_ppe_frame(
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA
         )
 
-    # ── Alarm banneri ─────────────────────────────────────────────────────────
     has_violation = len(violations) > 0
     if has_violation:
         width = frame.shape[1]
@@ -186,13 +150,10 @@ def analyze_ppe_frame(
 def _draw_label(img: np.ndarray, text: str, x: int, y: int, color: tuple) -> None:
     """Matn uchun to'ldirilgan fon bilan label chizish (katta va ko'rimsiz)."""
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale, thick = 0.7, 2          # avvalgi 0.5, 1 dan kattaroq
+    scale, thick = 0.7, 2
     (tw, th), baseline = cv2.getTextSize(text, font, scale, thick)
     pad = 6
-    ty = max(th + pad + 2, y)      # label yuqoriga chiqmasligi uchun
-    # Fon to'rtburchak
+    ty = max(th + pad + 2, y) 
     cv2.rectangle(img, (x, ty - th - pad), (x + tw + pad * 2, ty + baseline + 2), color, -1)
-    # Qora chegara
     cv2.rectangle(img, (x, ty - th - pad), (x + tw + pad * 2, ty + baseline + 2), (0, 0, 0), 1)
-    # Oq matn
     cv2.putText(img, text, (x + pad, ty - 2), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
