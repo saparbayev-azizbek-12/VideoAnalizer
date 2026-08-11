@@ -7,6 +7,7 @@ MIN_CONTRAST = 18.0
 MIN_SATURATION = 10.0
 MAX_UNIFORM_REGION_RATIO = 0.28
 MAX_SOLID_HUE_RATIO = 0.45
+MAX_COLOR_CHAOS_SCORE = 35.0
 
 def _check_blur(gray: np.ndarray) -> bool:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var()) >= MIN_BLUR_SCORE
@@ -55,6 +56,12 @@ def _check_solid_color_dominance(frame_bgr: np.ndarray) -> bool:
 
     return dominant_ratio < MAX_SOLID_HUE_RATIO
 
+def _check_color_chaos(frame_bgr: np.ndarray) -> bool:
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    s = hsv[:, :, 1].astype(np.float32)
+    h_diff = np.abs(np.diff(s, axis=1))
+    return float(h_diff.mean()) < MAX_COLOR_CHAOS_SCORE
+
 def is_frame_valid(frame_bgr: np.ndarray) -> bool:
     if frame_bgr is None or frame_bgr.size == 0:
         return False
@@ -68,5 +75,7 @@ def is_frame_valid(frame_bgr: np.ndarray) -> bool:
     if not _check_uniform_blocks(frame_bgr):
         return False
     if not _check_solid_color_dominance(frame_bgr):
+        return False
+    if not _check_color_chaos(frame_bgr):
         return False
     return True

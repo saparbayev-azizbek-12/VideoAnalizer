@@ -16,6 +16,8 @@ LABEL_FIRE = "Fire"
 LABEL_SMOKE = "Smoke"
 LABEL_NORMAL = "Normal"
 
+_MIN_FIRE_PIXEL_RATIO = 0.004
+
 _vit_processor = None
 _vit_model = None
 HF_REPO = "EdBianchi/vit-fire-detection"
@@ -57,6 +59,17 @@ def _classify_frame(processor, model, frame_bgr: np.ndarray) -> tuple[str, float
     results = [(id2label[i], p) for i, p in enumerate(probs)]
     best_label, best_conf = max(results, key=lambda x: x[1])
     return best_label, best_conf
+
+def _has_fire_colors(frame_bgr: np.ndarray, min_ratio: float = _MIN_FIRE_PIXEL_RATIO) -> bool:
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    fire_mask = (
+        ((h <= 25) | (h >= 160)) &
+        (s >= 150) &
+        (v >= 140)
+    )
+    total = frame_bgr.shape[0] * frame_bgr.shape[1]
+    return float(fire_mask.sum()) / total >= min_ratio
 
 @dataclass
 class FireEvent:
@@ -118,7 +131,7 @@ def process_video(
     input_path: str,
     output_path: str,
     progress_callback: Optional[ProgressCallback] = None,
-    fire_conf_threshold: float = 0.70,
+    fire_conf_threshold: float = 0.78,
     smoke_conf_threshold: float = 0.65,
     confirm_window: int = 6,
     confirm_min_hits: int = 3,
@@ -150,7 +163,11 @@ def process_video(
             progress_callback(frame_idx, total_frames)
 
         label, conf = _classify_frame(processor, model, frame)
-        frame_has_fire = label == LABEL_FIRE and conf >= fire_conf_threshold
+        frame_has_fire = (
+            label == LABEL_FIRE
+            and conf >= fire_conf_threshold
+            and _has_fire_colors(frame)
+        )
         frame_has_smoke = label == LABEL_SMOKE and conf >= smoke_conf_threshold
 
         confirmed_fire, confirmed_smoke = validator.update(frame_has_fire, frame_has_smoke)
@@ -184,9 +201,9 @@ def process_video(
 def detect_fire_frame(
     frame: np.ndarray,
     model=None,
-    conf_threshold: float = 0.70,
-    fire_conf_threshold: float = 0.70,
-    min_color_ratio: float = 0.0,
+    conf_threshold: float = 0.78,
+    fire_conf_threshold: float = 0.78,
+    min_color_ratio: float = _MIN_FIRE_PIXEL_RATIO,
     validator: Optional[TemporalValidator] = None,
     draw_banner: bool = True,
 ) -> tuple[np.ndarray, list[dict], bool, bool]:
@@ -198,7 +215,11 @@ def detect_fire_frame(
     label, conf = _classify_frame(processor, vit_model, frame)
 
     smoke_threshold = conf_threshold * 0.93
-    frame_has_fire = label == LABEL_FIRE and conf >= fire_conf_threshold
+    frame_has_fire = (
+        label == LABEL_FIRE
+        and conf >= fire_conf_threshold
+        and _has_fire_colors(frame, min_color_ratio)
+    )
     frame_has_smoke = label == LABEL_SMOKE and conf >= smoke_threshold
 
     detections: list[dict] = []
