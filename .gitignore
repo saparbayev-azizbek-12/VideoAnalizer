@@ -5,12 +5,13 @@ __pycache__
 .idea/
 *.pyc
 *.ipynb
+*.json
 .env
 uv.lock
 videoanalizer.egg-info/
 
 *.jpg
-multi-object-detector/dataset
+multi-object-detector/dataset/*
 multi_object_detector/analysis/models/vit-fire-detection/*
 
 form-detection/
