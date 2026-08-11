@@ -11,5 +11,6 @@ videoanalizer.egg-info/
 
 *.jpg
 multi-object-detector/dataset
+multi_object_detector/analysis/models/vit-fire-detection/*
 
 form-detection/
