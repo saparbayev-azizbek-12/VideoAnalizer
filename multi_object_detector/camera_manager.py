@@ -10,6 +10,7 @@ from typing import Optional
 from collections import deque
 from multi_object_detector import config
 from dataclasses import dataclass, field
+from multi_object_detector.stream_logger import stream_logger
 from multi_object_detector.analysis import models_manager, frame_filter
 from multi_object_detector.analysis.detectors import fall_detector, danger_zone_detector
 
@@ -130,17 +131,21 @@ class CameraWorker:
             if cap is None or not cap.isOpened():
                 cap = self._open_capture()
                 if not cap.isOpened():
+                    diag_err = stream_logger.log_connect_fail(self.id, self.name, self.source)
                     with self._lock:
                         self._connected = False
-                        self._last_error = "Manbaga ulanib bo'lmadi"
+                        self._last_error = diag_err
                     time.sleep(config.CAMERA_RECONNECT_DELAY_SEC)
                     continue
+                else:
+                    stream_logger.log_reconnect_success(self.id, self.name, self.source)
 
             ok, frame = cap.read()
             if not ok or frame is None:
+                drop_err = stream_logger.log_stream_drop(self.id, self.name, self.source)
                 with self._lock:
                     self._connected = False
-                    self._last_error = "Kadr o'qilmadi (oqim uzilgan bo'lishi mumkin)"
+                    self._last_error = drop_err
                 cap.release()
                 cap = None
                 time.sleep(config.CAMERA_RECONNECT_DELAY_SEC)
@@ -155,6 +160,7 @@ class CameraWorker:
 
             is_valid, corrupt_reason = self._stream_filter.check_frame(frame)
             if not is_valid:
+                stream_logger.log_corruption(self.id, self.name, self.source, corrupt_reason or "Kadr buzilgan")
                 with self._lock:
                     self._last_error = f"Buzilgan kadr o'tkazib yuborildi ({corrupt_reason})"
                     self._annotated_frame = frame
@@ -163,6 +169,7 @@ class CameraWorker:
             try:
                 annotated = self._analyze(frame.copy())
             except Exception as e:
+                stream_logger.log_error(self.id, self.name, self.source, f"Tahlil xatoligi: {e}")
                 annotated = frame
                 with self._lock:
                     self._last_error = f"Tahlil xatoligi: {e}"

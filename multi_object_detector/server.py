@@ -253,6 +253,20 @@ async def cameras_grid_preview():
 
     return Response(content=_encode_jpeg(grid), media_type="image/jpeg")
 
+@app.get("/api/logs/stream")
+async def get_stream_logs(limit: int = 100):
+    log_path = config.CAMERA_LOG_PATH
+    if not os.path.exists(log_path):
+        return {"logs": [], "total": 0}
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+        recent = lines[-limit:]
+        recent.reverse()
+        return {"logs": recent, "total": len(lines), "log_file": log_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Log faylini o'qishda xatolik: {e}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("server:app", host=config.SERVER_HOST, port=config.SERVER_PORT, reload=False)

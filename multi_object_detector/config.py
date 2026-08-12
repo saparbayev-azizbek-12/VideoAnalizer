@@ -66,3 +66,4 @@ API_TIMEOUT = 8
 
 DATASET_DIR = os.path.join(BASE_DIR, "dataset")
 SNAPSHOT_COOLDOWN_SEC = float(os.getenv("SNAPSHOT_COOLDOWN_SEC", "2.0"))
+CAMERA_LOG_PATH = os.getenv("CAMERA_LOG_PATH", os.path.join(PARENT_DIR, "camera_stream_errors.log"))
