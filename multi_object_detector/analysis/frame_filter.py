@@ -1,81 +1,213 @@
 from __future__ import annotations
 import cv2
+import time
 import numpy as np
+from typing import Optional, Tuple, Dict, Any
 
-MIN_BLUR_SCORE = 45.0
-MIN_CONTRAST = 18.0
-MIN_SATURATION = 10.0
-MAX_UNIFORM_REGION_RATIO = 0.28
-MAX_SOLID_HUE_RATIO = 0.45
-MAX_COLOR_CHAOS_SCORE = 35.0
+DEFAULT_BLOCK_SIZE = 16
+MAX_CONCEALMENT_BLOCK_RATIO = 0.02
+MAX_CONCEALMENT_ROW_RATIO = 0.50
+MB_TEAR_JUMP_THRESHOLD = 38.0
+MB_TEAR_RATIO_THRESHOLD = 3.2
 
-def _check_blur(gray: np.ndarray) -> bool:
-    return float(cv2.Laplacian(gray, cv2.CV_64F).var()) >= MIN_BLUR_SCORE
 
-def _check_contrast(gray: np.ndarray) -> bool:
-    return float(gray.std()) >= MIN_CONTRAST
+def check_frame_structure(frame: np.ndarray) -> Tuple[bool, Optional[str]]:
+    if frame is None:
+        return False, "Kadr mavjud emas (None)"
+    if not isinstance(frame, np.ndarray):
+        return False, "Kadr numpy massivi emas"
+    if frame.size == 0:
+        return False, "Kadr o'lchami bo'sh (size == 0)"
+    if frame.ndim != 3 or frame.shape[2] != 3:
+        return False, f"Kadr kanallari noto'g'ri: shape={frame.shape}"
+    h, w = frame.shape[:2]
+    if h < 16 or w < 16:
+        return False, f"Kadr o'lchami juda kichik ({w}x{h})"
+    if int(frame.max()) == 0:
+        return False, "Kadr butunlay qora (oqim uzilishi / signal yo'q)"
+    if int(frame.min()) == int(frame.max()):
+        return False, "Kadr butunlay bir xil rangda (muzlagan / signal yo'q)"
+    return True, None
 
-def _check_saturation(frame_bgr: np.ndarray) -> bool:
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-    return float(hsv[:, :, 1].mean()) >= MIN_SATURATION
 
-def _check_uniform_blocks(frame_bgr: np.ndarray) -> bool:
+def check_ffmpeg_concealment(
+    frame_bgr: np.ndarray,
+    block_size: int = DEFAULT_BLOCK_SIZE,
+    max_corrupt_block_ratio: float = MAX_CONCEALMENT_BLOCK_RATIO,
+    max_corrupt_row_ratio: float = MAX_CONCEALMENT_ROW_RATIO,
+) -> Tuple[bool, Optional[str]]:
     h, w = frame_bgr.shape[:2]
-    block_h, block_w = h // 4, w // 4
-    if block_h < 4 or block_w < 4:
-        return True
-    total_blocks = 0
-    uniform_blocks = 0
-    for r in range(4):
-        for c in range(4):
-            y1, y2 = r * block_h, (r + 1) * block_h
-            x1, x2 = c * block_w, (c + 1) * block_w
-            block = frame_bgr[y1:y2, x1:x2]
-            total_blocks += 1
-            if float(block.std()) < 6.0:
-                uniform_blocks += 1
-    return (uniform_blocks / total_blocks) < MAX_UNIFORM_REGION_RATIO
+    nb_y = h // block_size
+    nb_x = w // block_size
+    if nb_y < 1 or nb_x < 1:
+        return True, None
 
-def _check_solid_color_dominance(frame_bgr: np.ndarray) -> bool:
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-    saturation = hsv[:, :, 1]
-    value = hsv[:, :, 2]
-    hue = hsv[:, :, 0]
+    cropped = frame_bgr[: nb_y * block_size, : nb_x * block_size]
+    blocks = cropped.reshape(nb_y, block_size, nb_x, block_size, 3).transpose(0, 2, 1, 3, 4)
 
-    saturated_mask = (saturation > 80) & (value > 40)
-    total_pixels = frame_bgr.shape[0] * frame_bgr.shape[1]
-    saturated_count = int(saturated_mask.sum())
+    block_std = blocks.std(axis=(2, 3, 4))
+    block_mean = blocks.mean(axis=(2, 3, 4))
 
-    if saturated_count < total_pixels * 0.05:
-        return True
+    is_flat = block_std < 1.8
+    is_ffmpeg_gray = is_flat & (np.abs(block_mean - 128.0) <= 6.0)
+    is_pure_black = is_flat & (block_mean <= 1.5)
+    corrupt_mask = is_ffmpeg_gray | is_pure_black
 
-    hue_vals = hue[saturated_mask]
-    hist, _ = np.histogram(hue_vals, bins=18, range=(0, 180))
-    dominant_bin_count = int(hist.max())
-    dominant_ratio = dominant_bin_count / total_pixels
+    total_blocks = nb_y * nb_x
+    corrupt_blocks = int(np.sum(corrupt_mask))
+    corrupt_ratio = corrupt_blocks / total_blocks
 
-    return dominant_ratio < MAX_SOLID_HUE_RATIO
+    if corrupt_ratio >= max_corrupt_block_ratio:
+        return False, f"FFmpeg concealment (kulrang/buzilgan) bloklari aniqlandi ({corrupt_ratio * 100:.1f}% bloklar)"
 
-def _check_color_chaos(frame_bgr: np.ndarray) -> bool:
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-    s = hsv[:, :, 1].astype(np.float32)
-    h_diff = np.abs(np.diff(s, axis=1))
-    return float(h_diff.mean()) < MAX_COLOR_CHAOS_SCORE
+    row_corrupt_ratio = corrupt_mask.sum(axis=1) / nb_x
+    max_row_ratio = float(np.max(row_corrupt_ratio)) if len(row_corrupt_ratio) > 0 else 0.0
+    if max_row_ratio >= max_corrupt_row_ratio:
+        return False, f"Kadr qatorida oqim uzilishi aniqlandi (qatordagi buzilish: {max_row_ratio * 100:.1f}%)"
+
+    return True, None
+
+
+def check_slice_tearing(
+    gray: np.ndarray,
+    block_size: int = DEFAULT_BLOCK_SIZE,
+    jump_threshold: float = MB_TEAR_JUMP_THRESHOLD,
+    ratio_threshold: float = MB_TEAR_RATIO_THRESHOLD,
+) -> Tuple[bool, Optional[str]]:
+    h, w = gray.shape[:2]
+    if h < block_size * 2 or w < block_size * 2:
+        return True, None
+
+    diff_y = np.abs(gray[1:, :].astype(np.int32) - gray[:-1, :].astype(np.int32)).mean(axis=1)
+    mb_boundaries = np.arange(block_size - 1, h - 1, block_size)
+    if len(mb_boundaries) == 0:
+        return True, None
+
+    for b_idx in mb_boundaries:
+        b_jump = float(diff_y[b_idx])
+        if b_jump < jump_threshold:
+            continue
+
+        local_start = max(0, b_idx - block_size // 2)
+        local_end = min(len(diff_y), b_idx + block_size // 2 + 1)
+        local_diffs = np.delete(diff_y[local_start:local_end], b_idx - local_start)
+
+        if len(local_diffs) == 0:
+            continue
+
+        local_baseline = float(np.median(local_diffs))
+        if local_baseline < 1.0:
+            local_baseline = 1.0
+
+        if (b_jump / local_baseline >= ratio_threshold) and (b_jump >= jump_threshold):
+            return False, f"Makroblok uzilishi (slice tearing) aniqlandi (chegara sakrashi: {b_jump:.1f})"
+
+    return True, None
+
+
+def check_chroma_banding(
+    frame_bgr: np.ndarray,
+    block_size: int = DEFAULT_BLOCK_SIZE,
+) -> Tuple[bool, Optional[str]]:
+    h, w = frame_bgr.shape[:2]
+    nb_y = h // block_size
+    if nb_y < 2:
+        return True, None
+
+    ycrcb = cv2.cvtColor(frame_bgr[: nb_y * block_size], cv2.COLOR_BGR2YCrCb)
+
+    for ch_idx, ch_name in [(1, "Cr"), (2, "Cb")]:
+        ch = ycrcb[:, :, ch_idx]
+        stripes = ch.reshape(nb_y, block_size, w)
+        stripe_std = stripes.std(axis=(1, 2))
+        stripe_mean = stripes.mean(axis=(1, 2))
+
+        corrupt_stripe = (stripe_std < 2.5) & (np.abs(stripe_mean - 128.0) > 105.0)
+        if np.any(corrupt_stripe):
+            return False, f"G'ayritabiiy rang uzilishi (chroma corruption) aniqlandi ({ch_name} kanali)"
+
+    return True, None
+
+
+def check_frame_stream_validity(frame_bgr: np.ndarray) -> Tuple[bool, Optional[str]]:
+    valid_struct, reason = check_frame_structure(frame_bgr)
+    if not valid_struct:
+        return False, reason
+
+    valid_conceal, reason = check_ffmpeg_concealment(frame_bgr)
+    if not valid_conceal:
+        return False, reason
+
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    valid_tearing, reason = check_slice_tearing(gray)
+    if not valid_tearing:
+        return False, reason
+
+    valid_chroma, reason = check_chroma_banding(frame_bgr)
+    if not valid_chroma:
+        return False, reason
+
+    return True, None
+
 
 def is_frame_valid(frame_bgr: np.ndarray) -> bool:
-    if frame_bgr is None or frame_bgr.size == 0:
-        return False
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    if not _check_blur(gray):
-        return False
-    if not _check_contrast(gray):
-        return False
-    if not _check_saturation(frame_bgr):
-        return False
-    if not _check_uniform_blocks(frame_bgr):
-        return False
-    if not _check_solid_color_dominance(frame_bgr):
-        return False
-    if not _check_color_chaos(frame_bgr):
-        return False
-    return True
+    valid, _ = check_frame_stream_validity(frame_bgr)
+    return valid
+
+
+class StreamCorruptionFilter:
+    def __init__(self, camera_id: str = "default", max_frozen_frames: int = 150):
+        self.camera_id = camera_id
+        self.max_frozen_frames = max_frozen_frames
+        self.total_frames = 0
+        self.corrupt_frames = 0
+        self.consecutive_corrupt = 0
+        self.consecutive_frozen = 0
+        self.last_valid_time: float = time.time()
+        self._prev_sample: Optional[np.ndarray] = None
+
+    def check_frame(self, frame: np.ndarray) -> Tuple[bool, Optional[str]]:
+        self.total_frames += 1
+
+        is_valid, reason = check_frame_stream_validity(frame)
+        if not is_valid:
+            self.corrupt_frames += 1
+            self.consecutive_corrupt += 1
+            return False, reason
+
+        if frame is not None and frame.size > 0:
+            sample = cv2.resize(frame, (48, 27))
+            if self._prev_sample is not None and np.array_equal(sample, self._prev_sample):
+                self.consecutive_frozen += 1
+                if self.consecutive_frozen > self.max_frozen_frames:
+                    return False, f"Oqim muzlab qolgan ({self.consecutive_frozen} ta bir xil kadr)"
+            else:
+                self.consecutive_frozen = 0
+                self._prev_sample = sample
+
+        self.consecutive_corrupt = 0
+        self.last_valid_time = time.time()
+        return True, None
+
+    def is_valid(self, frame: np.ndarray) -> bool:
+        valid, _ = self.check_frame(frame)
+        return valid
+
+    def get_stats(self) -> Dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "total_frames": self.total_frames,
+            "corrupt_frames": self.corrupt_frames,
+            "corrupt_ratio": (self.corrupt_frames / self.total_frames) if self.total_frames > 0 else 0.0,
+            "consecutive_corrupt": self.consecutive_corrupt,
+            "consecutive_frozen": self.consecutive_frozen,
+            "last_valid_time": self.last_valid_time,
+        }
+
+    def reset(self) -> None:
+        self.total_frames = 0
+        self.corrupt_frames = 0
+        self.consecutive_corrupt = 0
+        self.consecutive_frozen = 0
+        self._prev_sample = None
+
