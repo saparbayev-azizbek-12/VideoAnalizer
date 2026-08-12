@@ -14,7 +14,7 @@ from multi_object_detector.analysis import models_manager, frame_filter
 from multi_object_detector.analysis.detectors import fall_detector, danger_zone_detector
 
 
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;discardcorrupt"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 @dataclass
 class CameraEvent:
@@ -146,19 +146,19 @@ class CameraWorker:
                 time.sleep(config.CAMERA_RECONNECT_DELAY_SEC)
                 continue
 
-            is_valid, corrupt_reason = self._stream_filter.check_frame(frame)
-            if not is_valid:
-                with self._lock:
-                    self._connected = True
-                    self._last_error = f"Buzilgan kadr o'tkazib yuborildi ({corrupt_reason})"
-                continue
-
             self._update_fps_estimate()
             with self._lock:
                 self._connected = True
                 self._last_error = None
                 self._raw_frame = frame
             self.frame_idx += 1
+
+            is_valid, corrupt_reason = self._stream_filter.check_frame(frame)
+            if not is_valid:
+                with self._lock:
+                    self._last_error = f"Buzilgan kadr o'tkazib yuborildi ({corrupt_reason})"
+                    self._annotated_frame = frame
+                continue
 
             try:
                 annotated = self._analyze(frame.copy())

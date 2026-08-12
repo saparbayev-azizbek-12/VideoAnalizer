@@ -5,10 +5,10 @@ import numpy as np
 from typing import Optional, Tuple, Dict, Any
 
 DEFAULT_BLOCK_SIZE = 16
-MAX_CONCEALMENT_BLOCK_RATIO = 0.02
-MAX_CONCEALMENT_ROW_RATIO = 0.50
-MB_TEAR_JUMP_THRESHOLD = 38.0
-MB_TEAR_RATIO_THRESHOLD = 3.2
+MAX_CONCEALMENT_BLOCK_RATIO = 0.15
+MAX_CONCEALMENT_ROW_RATIO = 0.75
+MB_TEAR_JUMP_THRESHOLD = 65.0
+MB_TEAR_RATIO_THRESHOLD = 4.5
 
 
 def check_frame_structure(frame: np.ndarray) -> Tuple[bool, Optional[str]]:
@@ -23,10 +23,6 @@ def check_frame_structure(frame: np.ndarray) -> Tuple[bool, Optional[str]]:
     h, w = frame.shape[:2]
     if h < 16 or w < 16:
         return False, f"Kadr o'lchami juda kichik ({w}x{h})"
-    if int(frame.max()) == 0:
-        return False, "Kadr butunlay qora (oqim uzilishi / signal yo'q)"
-    if int(frame.min()) == int(frame.max()):
-        return False, "Kadr butunlay bir xil rangda (muzlagan / signal yo'q)"
     return True, None
 
 
@@ -39,7 +35,7 @@ def check_ffmpeg_concealment(
     h, w = frame_bgr.shape[:2]
     nb_y = h // block_size
     nb_x = w // block_size
-    if nb_y < 1 or nb_x < 1:
+    if nb_y < 2 or nb_x < 2:
         return True, None
 
     cropped = frame_bgr[: nb_y * block_size, : nb_x * block_size]
@@ -48,19 +44,16 @@ def check_ffmpeg_concealment(
     block_std = blocks.std(axis=(2, 3, 4))
     block_mean = blocks.mean(axis=(2, 3, 4))
 
-    is_flat = block_std < 1.8
-    is_ffmpeg_gray = is_flat & (np.abs(block_mean - 128.0) <= 6.0)
-    is_pure_black = is_flat & (block_mean <= 1.5)
-    corrupt_mask = is_ffmpeg_gray | is_pure_black
+    is_ffmpeg_gray = (block_std < 1.0) & (np.abs(block_mean - 128.0) <= 3.0)
 
     total_blocks = nb_y * nb_x
-    corrupt_blocks = int(np.sum(corrupt_mask))
+    corrupt_blocks = int(np.sum(is_ffmpeg_gray))
     corrupt_ratio = corrupt_blocks / total_blocks
 
     if corrupt_ratio >= max_corrupt_block_ratio:
-        return False, f"FFmpeg concealment (kulrang/buzilgan) bloklari aniqlandi ({corrupt_ratio * 100:.1f}% bloklar)"
+        return False, f"FFmpeg concealment (kulrang) bloklari aniqlandi ({corrupt_ratio * 100:.1f}% bloklar)"
 
-    row_corrupt_ratio = corrupt_mask.sum(axis=1) / nb_x
+    row_corrupt_ratio = is_ffmpeg_gray.sum(axis=1) / nb_x
     max_row_ratio = float(np.max(row_corrupt_ratio)) if len(row_corrupt_ratio) > 0 else 0.0
     if max_row_ratio >= max_corrupt_row_ratio:
         return False, f"Kadr qatorida oqim uzilishi aniqlandi (qatordagi buzilish: {max_row_ratio * 100:.1f}%)"
@@ -75,7 +68,7 @@ def check_slice_tearing(
     ratio_threshold: float = MB_TEAR_RATIO_THRESHOLD,
 ) -> Tuple[bool, Optional[str]]:
     h, w = gray.shape[:2]
-    if h < block_size * 2 or w < block_size * 2:
+    if h < block_size * 4 or w < block_size * 4:
         return True, None
 
     diff_y = np.abs(gray[1:, :].astype(np.int32) - gray[:-1, :].astype(np.int32)).mean(axis=1)
@@ -111,7 +104,7 @@ def check_chroma_banding(
 ) -> Tuple[bool, Optional[str]]:
     h, w = frame_bgr.shape[:2]
     nb_y = h // block_size
-    if nb_y < 2:
+    if nb_y < 4:
         return True, None
 
     ycrcb = cv2.cvtColor(frame_bgr[: nb_y * block_size], cv2.COLOR_BGR2YCrCb)
@@ -122,7 +115,7 @@ def check_chroma_banding(
         stripe_std = stripes.std(axis=(1, 2))
         stripe_mean = stripes.mean(axis=(1, 2))
 
-        corrupt_stripe = (stripe_std < 2.5) & (np.abs(stripe_mean - 128.0) > 105.0)
+        corrupt_stripe = (stripe_std < 1.0) & (np.abs(stripe_mean - 128.0) > 115.0)
         if np.any(corrupt_stripe):
             return False, f"G'ayritabiiy rang uzilishi (chroma corruption) aniqlandi ({ch_name} kanali)"
 
