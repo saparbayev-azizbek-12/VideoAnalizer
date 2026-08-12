@@ -1,0 +1,764 @@
+from __future__ import annotations
+import os
+import sys
+import csv
+import cv2
+import json
+import queue
+import threading
+import numpy as np
+import tkinter as tk
+from typing import Optional
+from PIL import Image, ImageTk
+from tkinter import filedialog, messagebox, ttk
+
+
+_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+if _PKG_DIR not in sys.path:
+    sys.path.insert(0, os.path.dirname(_PKG_DIR))
+
+from multi_object_detector import config
+from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter
+
+BG = "#1a1a2e"
+BG2 = "#16213e"
+CARD = "#0f3460"
+ACCENT = "#e94560"
+ACCENT2 = "#533483"
+FG = "#eaeaea"
+FG2 = "#a0a0c0"
+GREEN = "#00d26a"
+YELLOW = "#f5c518"
+RED = "#ff4757"
+
+FONT_TITLE = ("Segoe UI", 15, "bold")
+FONT_LABEL = ("Segoe UI", 10)
+FONT_SMALL = ("Segoe UI", 9)
+FONT_MONO = ("Consolas", 9)
+
+PREVIEW_W = 640
+PREVIEW_H = 380
+
+MODEL_INFO = {
+    "fire": {"label": "🔥 Yong'in / Tutun", "slow": False},
+    "fall": {"label": "🚨 Yiqilib tushish", "slow": True},
+    "ppe":  {"label": "🦺 PPE / Xavfsizlik kiyimi", "slow": False},
+}
+
+
+def _sec_to_hms(sec: float) -> str:
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = int(sec % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _analyze_frame_multi(
+    frame: np.ndarray,
+    frame_idx: int,
+    fps: float,
+    models_enabled: dict[str, bool],
+    _fire_model=None,
+    _ppe_model=None,
+    _fall_model=None,
+    _fall_pose=None,
+    _fall_track_states=None,
+) -> tuple[np.ndarray, list[dict]]:
+    from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
+    annotated = frame.copy()
+    events = []
+    ts = frame_idx / max(fps, 1)
+
+    if models_enabled.get("fire") and _fire_model is not None:
+        proc, mdl = _fire_model
+        try:
+            ann, det_events, has_fire, has_smoke = fire_detector.detect_fire_frame(
+                annotated, model=(proc, mdl),
+                conf_threshold=config.VIT_FIRE_CONF_THRESHOLD,
+                fire_conf_threshold=config.VIT_FIRE_CONF_THRESHOLD,
+                min_color_ratio=fire_detector._MIN_FIRE_PIXEL_RATIO,
+            )
+            annotated = ann
+            if has_fire:
+                events.append({"frame": frame_idx, "ts": ts, "model": "fire", "label": "FIRE", "conf": None})
+            if has_smoke:
+                events.append({"frame": frame_idx, "ts": ts, "model": "fire", "label": "SMOKE", "conf": None})
+        except Exception:
+            pass
+
+    if models_enabled.get("ppe") and _ppe_model is not None:
+        try:
+            ann, violations, has_v = ppe_detector.analyze_ppe_frame(
+                annotated, model=_ppe_model, conf=config.PPE_CONF_THRESHOLD
+            )
+            annotated = ann
+            for v in violations:
+                events.append({
+                    "frame": frame_idx, "ts": ts, "model": "ppe",
+                    "label": "PPE_VIOLATION",
+                    "conf": round(v.get("confidence", 0), 3),
+                })
+        except Exception:
+            pass
+
+    if models_enabled.get("fall") and _fall_model is not None and _fall_pose is not None:
+        import mediapipe as mp
+        mp_drawing = mp.solutions.drawing_utils
+        mp_pose = mp.solutions.pose
+        any_fall_detected = False
+        try:
+            h_f, w_f = annotated.shape[:2]
+            results_det = _fall_model.track(
+                annotated, persist=True, classes=[0],
+                tracker="bytetrack.yaml", verbose=False
+            )
+            for result in results_det:
+                boxes = result.boxes
+                if boxes.id is None:
+                    continue
+                for bbox, track_id_t in zip(boxes.xyxy, boxes.id):
+                    track_id = int(track_id_t)
+                    x1, y1, x2, y2 = map(int, bbox)
+                    x1, y1 = max(x1, 0), max(y1, 0)
+                    x2, y2 = min(x2, w_f), min(y2, h_f)
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+                    state = _fall_track_states.setdefault(track_id, fall_detector.TrackState())
+                    state.last_seen_frame = frame_idx
+                    bw, bh = x2 - x1, y2 - y1
+                    if not fall_detector.is_valid_person_crop(bw, bh):
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (128, 128, 128), 1)
+                        continue
+                    crop = annotated[y1:y2, x1:x2].copy()
+                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                    pr = _fall_pose.process(crop_rgb)
+                    posture = "Unknown"
+                    smoothed_angle = 0.0
+                    vel = 0.0
+                    if pr.pose_landmarks:
+                        lms = pr.pose_landmarks.landmark
+                        if fall_detector.is_pose_reliable(lms):
+                            ch, cw = crop.shape[:2]
+                            shoulders = [
+                                (lms[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x * cw,
+                                 lms[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y * ch),
+                                (lms[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x * cw,
+                                 lms[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y * ch),
+                            ]
+                            hips = [
+                                (lms[mp_pose.PoseLandmark.LEFT_HIP.value].x * cw,
+                                 lms[mp_pose.PoseLandmark.LEFT_HIP.value].y * ch),
+                                (lms[mp_pose.PoseLandmark.RIGHT_HIP.value].x * cw,
+                                 lms[mp_pose.PoseLandmark.RIGHT_HIP.value].y * ch),
+                            ]
+                            sc = ((shoulders[0][0] + shoulders[1][0]) / 2,
+                                  (shoulders[0][1] + shoulders[1][1]) / 2)
+                            hc = ((hips[0][0] + hips[1][0]) / 2,
+                                  (hips[0][1] + hips[1][1]) / 2)
+                            angle = fall_detector.calculate_angle(hc, sc)
+                            state.angle_history.append(angle)
+                            smoothed_angle = float(np.median(state.angle_history))
+                            posture = fall_detector.classify_posture(smoothed_angle)
+                            hip_y_abs = y1 + hc[1]
+                            state.hip_history.append((frame_idx, hip_y_abs, bh))
+                            ar = bh / max(bw, 1)
+                            state.aspect_history.append((frame_idx, ar))
+                            vel = fall_detector._vertical_velocity(state.hip_history, fps)
+                            adrop = fall_detector._aspect_dropped(state.aspect_history, fps)
+
+                            mp_drawing.draw_landmarks(
+                                crop,
+                                pr.pose_landmarks,
+                                mp_pose.POSE_CONNECTIONS,
+                                mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2, circle_radius=2),
+                                mp_drawing.DrawingSpec(color=(0, 128, 255), thickness=2, circle_radius=2),
+                            )
+                            annotated[y1:y2, x1:x2] = crop
+
+                            if posture in ("Falling", "Lying Down"):
+                                state.falling_count += 1
+                            else:
+                                state.falling_count = 0
+                            min_f = fall_detector.FALL_MIN_FRAMES_RATIO * fps
+                            max_f = fall_detector.FALL_MAX_FRAMES_RATIO * fps
+                            can_trigger = (
+                                min_f <= state.falling_count <= max_f
+                                and (vel >= fall_detector.VELOCITY_THRESHOLD) and adrop
+                                and state.standing_frames >= fall_detector.STANDING_MIN_FRAMES
+                            )
+                            if can_trigger:
+                                state.confirm_count += 1
+                            else:
+                                state.confirm_count = max(0, state.confirm_count - 1)
+                            if state.confirm_count >= fall_detector.FALL_CONFIRM_FRAMES:
+                                if not state.fall_detected:
+                                    events.append({"frame": frame_idx, "ts": ts, "model": "fall",
+                                                   "label": "FALL_DETECTED", "conf": None})
+                                state.fall_detected = True
+                            if posture == "Standing":
+                                state.fall_detected = False
+                                state.confirm_count = 0
+                                state.standing_frames += 1
+                            else:
+                                state.standing_frames = 0
+
+                    is_fall = state.fall_detected or posture == "Falling"
+                    if is_fall:
+                        any_fall_detected = True
+                        box_color = (0, 0, 255)
+                        lbl_text = f"ID{track_id}: FALL ({smoothed_angle:.0f}deg)"
+                    elif posture == "Lying Down":
+                        box_color = (0, 140, 255)
+                        lbl_text = f"ID{track_id}: Lying ({smoothed_angle:.0f}deg)"
+                    else:
+                        box_color = (0, 200, 60)
+                        lbl_text = f"ID{track_id}: {posture} ({smoothed_angle:.0f}deg)"
+
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
+                    (tw, th), bl = cv2.getTextSize(lbl_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+                    ty = max(th + 4, y1)
+                    cv2.rectangle(annotated, (x1, ty - th - 6), (x1 + tw + 6, ty + bl + 2), box_color, -1)
+                    cv2.putText(annotated, lbl_text, (x1 + 3, ty - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+
+            if any_fall_detected:
+                cv2.rectangle(annotated, (0, 0), (w_f, 42), (0, 0, 220), -1)
+                cv2.putText(annotated, "ALARM: FALL DETECTED (YIQILISH)", (20, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
+        except Exception:
+            pass
+
+    return annotated, events
+
+
+class VideoAnalyzerApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("🎬 Video Tahlil Tizimi")
+        self.configure(bg=BG)
+        self.geometry("1200x720")
+        self.minsize(900, 600)
+        self.resizable(True, True)
+
+        self._video_path: Optional[str] = None
+        self._video_info: dict = {}
+        self._running = False
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+        self._fire_model = None
+        self._ppe_model = None
+        self._fall_model = None
+
+        self._events: list[dict] = []
+        self._output_video_path: Optional[str] = None
+        self._total_frames = 0
+
+        self._ui_queue: queue.Queue = queue.Queue()
+
+        self._model_vars: dict[str, tk.BooleanVar] = {
+            "fire": tk.BooleanVar(value=True),
+            "fall": tk.BooleanVar(value=False),
+            "ppe": tk.BooleanVar(value=True),
+        }
+        self._every_n_var = tk.IntVar(value=3)
+        self._conf_var = tk.DoubleVar(value=0.50)
+
+        self._build_ui()
+        self._poll_ui_queue()
+
+    def _styled_frame(self, parent, bg=None, **kwargs):
+        return tk.Frame(parent, bg=bg or BG2, **kwargs)
+
+    def _label(self, parent, text, font=None, fg=None, bg=None, **kw):
+        return tk.Label(parent, text=text, font=font or FONT_LABEL,
+                        fg=fg or FG, bg=bg or BG2, **kw)
+
+    def _build_ui(self):
+        top_bar = tk.Frame(self, bg=BG, pady=10)
+        top_bar.pack(fill="x")
+        tk.Label(top_bar, text="🎬  Video Tahlil Tizimi", font=("Segoe UI", 16, "bold"),
+                 fg=ACCENT, bg=BG).pack(side="left", padx=18)
+        tk.Label(top_bar, text="Backend'dan mustaqil  |  To'g'ridan-to'g'ri AI modellar",
+                 font=FONT_SMALL, fg=FG2, bg=BG).pack(side="left", padx=6)
+
+        tk.Frame(self, bg=CARD, height=1).pack(fill="x")
+
+        content = tk.Frame(self, bg=BG)
+        content.pack(fill="both", expand=True, padx=0, pady=0)
+
+        left = self._build_left_panel(content)
+        left.pack(side="left", fill="y", padx=(10, 5), pady=10)
+
+        right = self._build_right_panel(content)
+        right.pack(side="left", fill="both", expand=True, padx=(5, 10), pady=10)
+
+    def _build_left_panel(self, parent) -> tk.Frame:
+        panel = self._styled_frame(parent, bg=BG2, width=295)
+        panel.pack_propagate(False)
+
+        self._section(panel, "📁  Video Yuklash")
+        self._btn(panel, "📂  Video Tanlash", self._pick_video, color=ACCENT).pack(
+            fill="x", padx=10, pady=(0, 4))
+
+        info_f = self._styled_frame(panel)
+        info_f.pack(fill="x", padx=10, pady=(0, 8))
+        self._file_name_lbl = self._label(info_f, "Fayl tanlanmagan", fg=FG2)
+        self._file_name_lbl.pack(anchor="w")
+        self._file_info_lbl = self._label(info_f, "", fg=FG2, font=FONT_SMALL)
+        self._file_info_lbl.pack(anchor="w")
+
+        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
+
+        self._section(panel, "🤖  Modellar")
+        for model_id, info in MODEL_INFO.items():
+            row = tk.Frame(panel, bg=BG2)
+            row.pack(fill="x", padx=10, pady=2)
+            tk.Checkbutton(
+                row, text=info["label"],
+                variable=self._model_vars[model_id],
+                font=FONT_LABEL, fg=FG, bg=BG2,
+                selectcolor=CARD, activebackground=BG2,
+                activeforeground=FG, bd=0, highlightthickness=0
+            ).pack(side="left")
+            if info["slow"]:
+                tk.Label(row, text="(sekin)", font=FONT_SMALL, fg=YELLOW, bg=BG2).pack(side="left", padx=4)
+
+        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
+
+        self._section(panel, "⚙️  Sozlamalar")
+        cfg_f = self._styled_frame(panel)
+        cfg_f.pack(fill="x", padx=10, pady=(0, 8))
+
+        for label, var, frm, to, inc, fmt in [
+            ("Har N-kadr tahlil:", self._every_n_var, 1, 30, 1, None),
+            ("Min ishonch:", self._conf_var, 0.1, 1.0, 0.05, "%.2f"),
+        ]:
+            row = tk.Frame(cfg_f, bg=BG2)
+            row.pack(fill="x", pady=3)
+            self._label(row, label, bg=BG2).pack(side="left")
+            kw = dict(from_=frm, to=to, increment=inc, textvariable=var,
+                      width=6, bg=CARD, fg=FG, insertbackground=FG,
+                      buttonbackground=CARD, font=FONT_LABEL, bd=0)
+            if fmt:
+                kw["format"] = fmt
+            tk.Spinbox(row, **kw).pack(side="right")
+
+        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
+
+        self._section(panel, "▶  Boshqaruv")
+        ctrl_f = self._styled_frame(panel)
+        ctrl_f.pack(fill="x", padx=10, pady=(0, 6))
+
+        self._start_btn = self._btn(ctrl_f, "▶  Tahlilni Boshlash", self._start_analysis, color=GREEN)
+        self._start_btn.pack(fill="x", pady=2)
+        self._stop_btn = self._btn(ctrl_f, "⏹  To'xtatish", self._stop_analysis, color=RED)
+        self._stop_btn.pack(fill="x", pady=2)
+        self._stop_btn.config(state="disabled")
+
+        self._progress_var = tk.DoubleVar(value=0)
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("P.Horizontal.TProgressbar",
+                        troughcolor=CARD, background=ACCENT,
+                        darkcolor=ACCENT, lightcolor=ACCENT, bordercolor=BG2)
+        ttk.Progressbar(panel, variable=self._progress_var, maximum=100,
+                        style="P.Horizontal.TProgressbar").pack(fill="x", padx=10, pady=(4, 2))
+        self._progress_lbl = self._label(panel, "Tayyor", fg=FG2, font=FONT_SMALL)
+        self._progress_lbl.pack(padx=10, anchor="w")
+
+        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
+
+        self._section(panel, "⬇  Yuklab olish")
+        dl_f = self._styled_frame(panel)
+        dl_f.pack(fill="x", padx=10, pady=(0, 10))
+
+        self._dl_video_btn = self._btn(dl_f, "🎞  Annotated Video (MP4)", self._download_video, color=ACCENT2)
+        self._dl_video_btn.pack(fill="x", pady=2)
+        self._dl_video_btn.config(state="disabled")
+
+        self._dl_csv_btn = self._btn(dl_f, "📋  Hisobot (CSV)", self._download_csv, color=ACCENT2)
+        self._dl_csv_btn.pack(fill="x", pady=2)
+        self._dl_csv_btn.config(state="disabled")
+
+        self._dl_json_btn = self._btn(dl_f, "📄  JSON Natija", self._download_json, color=ACCENT2)
+        self._dl_json_btn.pack(fill="x", pady=2)
+        self._dl_json_btn.config(state="disabled")
+
+        return panel
+
+    def _build_right_panel(self, parent) -> tk.Frame:
+        panel = self._styled_frame(parent, bg=BG)
+        panel.columnconfigure(0, weight=1)
+        panel.rowconfigure(0, weight=2)
+        panel.rowconfigure(1, weight=1)
+
+        preview_card = tk.Frame(panel, bg=CARD, bd=0)
+        preview_card.grid(row=0, column=0, sticky="nsew", pady=(0, 6))
+
+        hdr = tk.Frame(preview_card, bg=CARD)
+        hdr.pack(fill="x", padx=10, pady=(8, 4))
+        tk.Label(hdr, text="🎞  Joriy Kadr", font=("Segoe UI", 11, "bold"),
+                 fg=FG, bg=CARD).pack(side="left")
+        self._frame_lbl = tk.Label(hdr, text="—", font=FONT_SMALL, fg=FG2, bg=CARD)
+        self._frame_lbl.pack(side="right")
+
+        self._canvas = tk.Canvas(preview_card, bg="#0a0a1a",
+                                 width=PREVIEW_W, height=PREVIEW_H, highlightthickness=0)
+        self._canvas.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+        self._photo: Optional[ImageTk.PhotoImage] = None
+
+        events_card = tk.Frame(panel, bg=CARD, bd=0)
+        events_card.grid(row=1, column=0, sticky="nsew")
+
+        ehdr = tk.Frame(events_card, bg=CARD)
+        ehdr.pack(fill="x", padx=10, pady=(8, 4))
+        tk.Label(ehdr, text="📋  Aniqlangan Hodisalar", font=("Segoe UI", 11, "bold"),
+                 fg=FG, bg=CARD).pack(side="left")
+        self._event_count_lbl = tk.Label(ehdr, text="0 ta hodisa", font=FONT_SMALL, fg=FG2, bg=CARD)
+        self._event_count_lbl.pack(side="right")
+
+        tree_frame = tk.Frame(events_card, bg=CARD)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+
+        style = ttk.Style()
+        style.configure("Dark.Treeview",
+                        background=BG2, foreground=FG,
+                        fieldbackground=BG2, rowheight=22,
+                        bordercolor=CARD, borderwidth=0, font=FONT_MONO)
+        style.configure("Dark.Treeview.Heading",
+                        background=CARD, foreground=FG,
+                        relief="flat", font=("Segoe UI", 9, "bold"))
+        style.map("Dark.Treeview", background=[("selected", ACCENT2)])
+
+        cols = ("Frame", "Vaqt", "Model", "Natija", "Ishonch")
+        self._tree = ttk.Treeview(tree_frame, columns=cols, show="headings",
+                                  style="Dark.Treeview", height=7)
+        for col, w in zip(cols, [70, 80, 120, 180, 80]):
+            self._tree.heading(col, text=col)
+            self._tree.column(col, width=w, minwidth=40)
+
+        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self._tree.yview)
+        self._tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self._tree.pack(side="left", fill="both", expand=True)
+
+        return panel
+
+    def _section(self, parent, text):
+        tk.Label(parent, text=text, font=("Segoe UI", 10, "bold"),
+                 fg=ACCENT, bg=BG2).pack(anchor="w", padx=10, pady=(10, 4))
+
+    def _btn(self, parent, text, cmd, color=ACCENT):
+        b = tk.Button(parent, text=text, command=cmd,
+                      bg=color, fg="#ffffff", font=("Segoe UI", 10, "bold"),
+                      bd=0, relief="flat", cursor="hand2",
+                      activebackground=color, activeforeground="#ffffff",
+                      pady=7, padx=6)
+        b.bind("<Enter>", lambda e: b.config(bg=self._lighten(color)))
+        b.bind("<Leave>", lambda e: b.config(bg=color))
+        return b
+
+    def _lighten(self, hex_color: str) -> str:
+        h = hex_color.lstrip("#")
+        r, g, bl = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"#{min(255,r+30):02x}{min(255,g+30):02x}{min(255,bl+30):02x}"
+
+    def _pick_video(self):
+        path = filedialog.askopenfilename(
+            title="Video fayl tanlash",
+            filetypes=[("Video", "*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.ts"), ("Barchasi", "*.*")]
+        )
+        if not path:
+            return
+        self._video_path = path
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            messagebox.showerror("Xatolik", "Video faylni ochib bo'lmadi!")
+            return
+        fps = 10
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        dur = n / fps if fps > 0 else 0
+        cap.release()
+        self._video_info = {"fps": fps, "w": w, "h": h, "n": n, "dur": dur}
+        bn = os.path.basename(path)
+        self._file_name_lbl.config(text=bn[:40] + "…" if len(bn) > 40 else bn, fg=FG)
+        self._file_info_lbl.config(
+            text=f"{w}x{h}  |  {fps:.1f} fps  |  {n} kadr  |  {_sec_to_hms(dur)}", fg=GREEN)
+        self._reset_results()
+
+    def _reset_results(self):
+        self._events = []
+        self._output_video_path = None
+        self._progress_var.set(0)
+        self._progress_lbl.config(text="Tayyor")
+        for item in self._tree.get_children():
+            self._tree.delete(item)
+        self._event_count_lbl.config(text="0 ta hodisa")
+        for b in (self._dl_video_btn, self._dl_csv_btn, self._dl_json_btn):
+            b.config(state="disabled")
+        self._canvas.delete("all")
+        self._frame_lbl.config(text="—")
+
+    def _start_analysis(self):
+        if not self._video_path:
+            messagebox.showwarning("Ogohlantirish", "Avval video fayl tanlang!")
+            return
+        if not any(v.get() for v in self._model_vars.values()):
+            messagebox.showwarning("Ogohlantirish", "Kamida bitta modelni tanlang!")
+            return
+        self._reset_results()
+        self._stop_event.clear()
+        self._running = True
+        self._start_btn.config(state="disabled")
+        self._stop_btn.config(state="normal")
+        self._thread = threading.Thread(target=self._run_analysis, daemon=True)
+        self._thread.start()
+
+    def _stop_analysis(self):
+        self._stop_event.set()
+        self._running = False
+        self._progress_lbl.config(text="To'xtatildi")
+        self._start_btn.config(state="normal")
+        self._stop_btn.config(state="disabled")
+
+    def _run_analysis(self):
+        from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
+
+        self._ui_queue.put(("status", "Modellar yuklanmoqda…"))
+
+        fire_m = None
+        if self._model_vars["fire"].get():
+            if self._fire_model is None:
+                self._fire_model = fire_detector.get_model()
+            fire_m = self._fire_model
+
+        ppe_m = None
+        if self._model_vars["ppe"].get():
+            if self._ppe_model is None:
+                self._ppe_model = ppe_detector.get_model()
+            ppe_m = self._ppe_model
+
+        fall_m = None
+        fall_pose = None
+        fall_states: dict = {}
+        if self._model_vars["fall"].get():
+            if self._fall_model is None:
+                self._fall_model = fall_detector.get_model()
+            fall_m = self._fall_model
+            import mediapipe as mp
+            fall_pose = mp.solutions.pose.Pose(
+                static_image_mode=True,
+                min_detection_confidence=0.75,
+                min_tracking_confidence=0.75,
+            )
+
+        models_enabled = {k: v.get() for k, v in self._model_vars.items()}
+        every_n = max(1, self._every_n_var.get())
+
+        cap = cv2.VideoCapture(self._video_path)
+        if not cap.isOpened():
+            self._ui_queue.put(("error", "Video ochilmadi"))
+            return
+
+        fps = 10
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+
+        out_dir = os.path.dirname(self._video_path)
+        base = os.path.splitext(os.path.basename(self._video_path))[0]
+        out_path = os.path.join(out_dir, f"{base}_analyzed.mp4")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
+
+        filt = StreamCorruptionFilter(camera_id="video_ui")
+        events: list[dict] = []
+        frame_idx = 0
+
+        self._ui_queue.put(("status", "Tahlil boshlandi…"))
+
+        try:
+            while cap.isOpened():
+                if self._stop_event.is_set():
+                    break
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frame_idx += 1
+                pct = (frame_idx / total) * 100
+
+                valid, _ = filt.check_frame(frame)
+                if not valid:
+                    writer.write(frame)
+                    self._ui_queue.put(("progress", pct, frame_idx, total, None))
+                    continue
+
+                if frame_idx % every_n == 0:
+                    annotated, new_events = _analyze_frame_multi(
+                        frame, frame_idx, fps, models_enabled,
+                        _fire_model=fire_m, _ppe_model=ppe_m,
+                        _fall_model=fall_m, _fall_pose=fall_pose,
+                        _fall_track_states=fall_states,
+                    )
+                    events.extend(new_events)
+                    writer.write(annotated)
+                    self._ui_queue.put(("progress", pct, frame_idx, total, annotated))
+                else:
+                    writer.write(frame)
+                    self._ui_queue.put(("progress", pct, frame_idx, total, None))
+        finally:
+            cap.release()
+            writer.release()
+            if fall_pose is not None:
+                try:
+                    fall_pose.close()
+                except Exception:
+                    pass
+
+        if not self._stop_event.is_set():
+            self._output_video_path = out_path
+            self._ui_queue.put(("done", events, out_path))
+        else:
+            self._ui_queue.put(("stopped", events))
+
+    def _poll_ui_queue(self):
+        try:
+            while True:
+                msg = self._ui_queue.get_nowait()
+                self._handle_ui_msg(msg)
+        except queue.Empty:
+            pass
+        self.after(80, self._poll_ui_queue)
+
+    def _handle_ui_msg(self, msg):
+        kind = msg[0]
+        if kind == "status":
+            self._progress_lbl.config(text=msg[1])
+        elif kind == "progress":
+            _, pct, fidx, total, frame = msg
+            self._progress_var.set(pct)
+            self._progress_lbl.config(text=f"Kadr: {fidx}/{total}  ({pct:.1f}%)")
+            self._frame_lbl.config(text=f"Kadr: {fidx} / {total}")
+            if frame is not None:
+                self._show_frame(frame)
+        elif kind == "done":
+            _, events, out_path = msg
+            self._events = events
+            self._output_video_path = out_path
+            self._progress_var.set(100)
+            self._progress_lbl.config(text=f"Tayyor! {len(events)} ta hodisa aniqlandi.")
+            self._running = False
+            self._start_btn.config(state="normal")
+            self._stop_btn.config(state="disabled")
+            self._populate_tree(events)
+            for b in (self._dl_video_btn, self._dl_csv_btn, self._dl_json_btn):
+                b.config(state="normal")
+        elif kind == "stopped":
+            _, events = msg
+            self._events = events
+            self._running = False
+            self._start_btn.config(state="normal")
+            self._stop_btn.config(state="disabled")
+            self._populate_tree(events)
+            if events:
+                self._dl_csv_btn.config(state="normal")
+                self._dl_json_btn.config(state="normal")
+        elif kind == "error":
+            self._running = False
+            self._start_btn.config(state="normal")
+            self._stop_btn.config(state="disabled")
+            messagebox.showerror("Xatolik", msg[1])
+
+    def _show_frame(self, frame_bgr: np.ndarray):
+        cw = self._canvas.winfo_width() or PREVIEW_W
+        ch = self._canvas.winfo_height() or PREVIEW_H
+        if cw < 10 or ch < 10:
+            return
+        fh, fw = frame_bgr.shape[:2]
+        scale = min(cw / fw, ch / fh)
+        nw, nh = int(fw * scale), int(fh * scale)
+        resized = cv2.resize(frame_bgr, (nw, nh), interpolation=cv2.INTER_AREA)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(rgb)
+        self._photo = ImageTk.PhotoImage(img)
+        self._canvas.delete("all")
+        self._canvas.create_image((cw - nw) // 2, (ch - nh) // 2, anchor="nw", image=self._photo)
+
+    def _populate_tree(self, events: list[dict]):
+        for item in self._tree.get_children():
+            self._tree.delete(item)
+        for ev in events:
+            self._tree.insert("", "end", values=(
+                ev.get("frame", ""),
+                _sec_to_hms(ev.get("ts", 0)),
+                ev.get("model", "").upper(),
+                ev.get("label", ""),
+                f"{ev['conf']:.2f}" if ev.get("conf") is not None else "—",
+            ))
+        self._event_count_lbl.config(text=f"{len(events)} ta hodisa")
+
+    def _download_video(self):
+        if not self._output_video_path or not os.path.exists(self._output_video_path):
+            messagebox.showwarning("Ogohlantirish", "Tahlil qilingan video mavjud emas.")
+            return
+        dest = filedialog.asksaveasfilename(
+            defaultextension=".mp4",
+            filetypes=[("MP4 Video", "*.mp4")],
+            initialfile=os.path.basename(self._output_video_path),
+        )
+        if dest:
+            import shutil
+            shutil.copy2(self._output_video_path, dest)
+            messagebox.showinfo("Muvaffaqiyat", f"Video saqlandi:\n{dest}")
+
+    def _download_csv(self):
+        if not self._events:
+            messagebox.showwarning("Ogohlantirish", "Hali hech qanday hodisa aniqlanmadi.")
+            return
+        dest = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV fayl", "*.csv")],
+            initialfile="tahlil_natija.csv",
+        )
+        if not dest:
+            return
+        with open(dest, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=["frame", "ts", "model", "label", "conf"])
+            writer.writeheader()
+            for ev in self._events:
+                writer.writerow({
+                    "frame": ev.get("frame"),
+                    "ts": round(ev.get("ts", 0), 3),
+                    "model": ev.get("model"),
+                    "label": ev.get("label"),
+                    "conf": ev.get("conf"),
+                })
+        messagebox.showinfo("Muvaffaqiyat", f"CSV saqlandi:\n{dest}")
+
+    def _download_json(self):
+        if not self._events:
+            messagebox.showwarning("Ogohlantirish", "Hali hech qanday hodisa aniqlanmadi.")
+            return
+        dest = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON fayl", "*.json")],
+            initialfile="tahlil_natija.json",
+        )
+        if not dest:
+            return
+        payload = {
+            "video": self._video_path,
+            "video_info": self._video_info,
+            "models_used": [k for k, v in self._model_vars.items() if v.get()],
+            "total_events": len(self._events),
+            "events": self._events,
+        }
+        with open(dest, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        messagebox.showinfo("Muvaffaqiyat", f"JSON saqlandi:\n{dest}")
+
+
+if __name__ == "__main__":
+    app = VideoAnalyzerApp()
+    app.mainloop()
