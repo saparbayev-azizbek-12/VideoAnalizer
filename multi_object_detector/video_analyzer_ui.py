@@ -1,22 +1,21 @@
 from __future__ import annotations
-import os
-import cv2
 import csv
+import json
+import os
+import queue
 import sys
+import threading
 import time
 import uuid
-import json
-import queue
-import threading
-import numpy as np
+import urllib.request
 import urllib.parse
 import urllib.error
 import tkinter as tk
-import urllib.request
-from typing import Optional
-from PIL import Image, ImageTk
 from tkinter import filedialog, messagebox, ttk
-
+from typing import Optional
+import cv2
+import numpy as np
+from PIL import Image, ImageTk
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PKG_DIR not in sys.path:
@@ -36,19 +35,19 @@ GREEN = "#00d26a"
 YELLOW = "#f5c518"
 RED = "#ff4757"
 
-FONT_TITLE = ("Segoe UI", 15, "bold")
-FONT_LABEL = ("Segoe UI", 10)
-FONT_SMALL = ("Segoe UI", 9)
+FONT_TITLE = ("Segoe UI", 14, "bold")
+FONT_LABEL = ("Segoe UI", 9)
+FONT_SMALL = ("Segoe UI", 8)
 FONT_MONO = ("Consolas", 9)
 
 PREVIEW_W = 640
 PREVIEW_H = 380
-DEFAULT_SERVER_URL = "http://10.0.89.251:8000"
+DEFAULT_SERVER_URL = "http://localhost:8001"
 
 MODEL_INFO = {
     "fire": {"label": "🔥 Yong'in / Tutun", "slow": False},
     "fall": {"label": "🚨 Yiqilib tushish", "slow": True},
-    "ppe":  {"label": "🦺 PPE / Xavfsizlik kiyimi", "slow": False},
+    "ppe":  {"label": "🦺 PPE / Xavfsizlik", "slow": False},
 }
 
 
@@ -131,47 +130,59 @@ def _analyze_frame_multi(
                     x2, y2 = min(x2, w_f), min(y2, h_f)
                     if x2 <= x1 or y2 <= y1:
                         continue
+                    bw, bh = x2 - x1, y2 - y1
+                    if max(bw, bh) < 30 or (bw * bh) < 500:
+                        continue
+
                     state = _fall_track_states.setdefault(track_id, fall_detector.TrackState())
                     state.last_seen_frame = frame_idx
-                    bw, bh = x2 - x1, y2 - y1
-                    if not fall_detector.is_valid_person_crop(bw, bh):
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (128, 128, 128), 1)
-                        continue
-                    crop = annotated[y1:y2, x1:x2].copy()
+                    ar = bh / max(bw, 1)
+
+                    # Padded crop for MediaPipe context
+                    pad_x = int(bw * 0.20)
+                    pad_y = int(bh * 0.20)
+                    cx1 = max(0, x1 - pad_x)
+                    cy1 = max(0, y1 - pad_y)
+                    cx2 = min(w_f, x2 + pad_x)
+                    cy2 = min(h_f, y2 + pad_y)
+                    crop = annotated[cy1:cy2, cx1:cx2].copy()
                     crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                     pr = _fall_pose.process(crop_rgb)
+
                     posture = "Unknown"
                     smoothed_angle = 0.0
+
                     if pr.pose_landmarks:
                         lms = pr.pose_landmarks.landmark
-                        if fall_detector.is_pose_reliable(lms):
-                            ch, cw = crop.shape[:2]
-                            shoulders = [
-                                (lms[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x * cw,
-                                 lms[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y * ch),
-                                (lms[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x * cw,
-                                 lms[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y * ch),
-                            ]
-                            hips = [
-                                (lms[mp_pose.PoseLandmark.LEFT_HIP.value].x * cw,
-                                 lms[mp_pose.PoseLandmark.LEFT_HIP.value].y * ch),
-                                (lms[mp_pose.PoseLandmark.RIGHT_HIP.value].x * cw,
-                                 lms[mp_pose.PoseLandmark.RIGHT_HIP.value].y * ch),
-                            ]
-                            sc = ((shoulders[0][0] + shoulders[1][0]) / 2,
-                                  (shoulders[0][1] + shoulders[1][1]) / 2)
-                            hc = ((hips[0][0] + hips[1][0]) / 2,
-                                  (hips[0][1] + hips[1][1]) / 2)
-                            angle = fall_detector.calculate_angle(hc, sc)
+                        cw = cx2 - cx1
+                        ch = cy2 - cy1
+                        l_sh = lms[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+                        r_sh = lms[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+                        l_hip = lms[mp_pose.PoseLandmark.LEFT_HIP.value]
+                        r_hip = lms[mp_pose.PoseLandmark.RIGHT_HIP.value]
+
+                        sh_vis = max(l_sh.visibility, r_sh.visibility)
+                        hip_vis = max(l_hip.visibility, r_hip.visibility)
+
+                        if sh_vis >= 0.20 and hip_vis >= 0.20:
+                            sh_x = (l_sh.x if l_sh.visibility >= r_sh.visibility else r_sh.x) * cw
+                            sh_y = (l_sh.y if l_sh.visibility >= r_sh.visibility else r_sh.y) * ch
+                            if l_sh.visibility >= 0.20 and r_sh.visibility >= 0.20:
+                                sh_x = (l_sh.x + r_sh.x) * 0.5 * cw
+                                sh_y = (l_sh.y + r_sh.y) * 0.5 * ch
+
+                            hip_x = (l_hip.x if l_hip.visibility >= r_hip.visibility else r_hip.x) * cw
+                            hip_y = (l_hip.y if l_hip.visibility >= r_hip.visibility else r_hip.y) * ch
+                            if l_hip.visibility >= 0.20 and r_hip.visibility >= 0.20:
+                                hip_x = (l_hip.x + r_hip.x) * 0.5 * cw
+                                hip_y = (l_hip.y + r_hip.y) * 0.5 * ch
+
+                            dy = hip_y - sh_y
+                            dx = hip_x - sh_x
+                            angle = abs(90.0 - np.degrees(math.atan2(dy, dx)))
                             state.angle_history.append(angle)
                             smoothed_angle = float(np.median(state.angle_history))
                             posture = fall_detector.classify_posture(smoothed_angle)
-                            hip_y_abs = y1 + hc[1]
-                            state.hip_history.append((frame_idx, hip_y_abs, bh))
-                            ar = bh / max(bw, 1)
-                            state.aspect_history.append((frame_idx, ar))
-                            vel = fall_detector._vertical_velocity(state.hip_history, fps)
-                            adrop = fall_detector._aspect_dropped(state.aspect_history, fps)
 
                             mp_drawing.draw_landmarks(
                                 crop,
@@ -180,34 +191,36 @@ def _analyze_frame_multi(
                                 mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2, circle_radius=2),
                                 mp_drawing.DrawingSpec(color=(0, 128, 255), thickness=2, circle_radius=2),
                             )
-                            annotated[y1:y2, x1:x2] = crop
+                            annotated[cy1:cy2, cx1:cx2] = crop
 
-                            if posture in ("Falling", "Lying Down"):
-                                state.falling_count += 1
-                            else:
-                                state.falling_count = 0
-                            min_f = fall_detector.FALL_MIN_FRAMES_RATIO * fps
-                            max_f = fall_detector.FALL_MAX_FRAMES_RATIO * fps
-                            can_trigger = (
-                                min_f <= state.falling_count <= max_f
-                                and (vel >= fall_detector.VELOCITY_THRESHOLD) and adrop
-                                and state.standing_frames >= fall_detector.STANDING_MIN_FRAMES
-                            )
-                            if can_trigger:
-                                state.confirm_count += 1
-                            else:
-                                state.confirm_count = max(0, state.confirm_count - 1)
-                            if state.confirm_count >= fall_detector.FALL_CONFIRM_FRAMES:
-                                if not state.fall_detected:
-                                    events.append({"frame": frame_idx, "ts": ts, "model": "fall",
-                                                   "label": "FALL_DETECTED", "conf": None})
-                                state.fall_detected = True
-                            if posture == "Standing":
-                                state.fall_detected = False
-                                state.confirm_count = 0
-                                state.standing_frames += 1
-                            else:
-                                state.standing_frames = 0
+                    # Geometric Aspect-Ratio Fallback
+                    if posture == "Unknown":
+                        if ar <= 0.85:
+                            posture = "Lying Down"
+                            smoothed_angle = max(65.0, 90.0 - (ar * 45.0))
+                        elif ar <= 1.15:
+                            posture = "Falling"
+                            smoothed_angle = 45.0
+                        else:
+                            posture = "Standing"
+                            smoothed_angle = 15.0
+
+                    if posture in ("Falling", "Lying Down") or ar < 0.90:
+                        state.falling_count += 1
+                    else:
+                        state.falling_count = max(0, state.falling_count - 1)
+
+                    if state.falling_count >= 2:
+                        if not state.fall_detected:
+                            events.append({
+                                "frame": frame_idx, "ts": round(ts, 3), "model": "fall",
+                                "label": "FALL_DETECTED", "conf": None
+                            })
+                        state.fall_detected = True
+
+                    if posture == "Standing" and ar > 1.3:
+                        state.fall_detected = False
+                        state.falling_count = 0
 
                     is_fall = state.fall_detected or posture == "Falling"
                     if is_fall:
@@ -239,10 +252,10 @@ def _analyze_frame_multi(
 class VideoAnalyzerApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("🎬 Video Tahlil Tizimi (Client & Server)")
+        self.title("🎬 Video Tahlil Tizimi")
         self.configure(bg=BG)
-        self.geometry("1220x750")
-        self.minsize(960, 640)
+        self.geometry("1200x700")
+        self.minsize(920, 580)
         self.resizable(True, True)
 
         self._video_path: Optional[str] = None
@@ -258,11 +271,10 @@ class VideoAnalyzerApp(tk.Tk):
         self._events: list[dict] = []
         self._output_video_path: Optional[str] = None
         self._active_job_id: Optional[str] = None
-        self._total_frames = 0
 
         self._ui_queue: queue.Queue = queue.Queue()
 
-        self._mode_var = tk.StringVar(value="server")  # "server" | "local"
+        self._mode_var = tk.StringVar(value="server")
         self._server_url_var = tk.StringVar(value=DEFAULT_SERVER_URL)
         self._model_vars: dict[str, tk.BooleanVar] = {
             "fire": tk.BooleanVar(value=True),
@@ -284,17 +296,28 @@ class VideoAnalyzerApp(tk.Tk):
                         fg=fg or FG, bg=bg or BG2, **kw)
 
     def _build_ui(self):
-        top_bar = tk.Frame(self, bg=BG, pady=8)
+        # Top Bar
+        top_bar = tk.Frame(self, bg=BG, pady=6)
         top_bar.pack(fill="x", padx=10)
-        tk.Label(top_bar, text="🎬  Video Tahlil Tizimi", font=("Segoe UI", 16, "bold"),
+        tk.Label(top_bar, text="🎬  Video Tahlil Tizimi", font=("Segoe UI", 15, "bold"),
                  fg=ACCENT, bg=BG).pack(side="left")
 
-        # Server status badge
+        # Top Bar Download Button (Always 100% visible on top!)
+        self._top_dl_btn = tk.Button(
+            top_bar, text="💾  Tahlil qilingan videoni yuklab olish (MP4)",
+            command=self._download_video,
+            bg=GREEN, fg="#ffffff", font=("Segoe UI", 10, "bold"),
+            bd=0, relief="flat", cursor="hand2", padx=14, pady=4,
+            activebackground=GREEN, activeforeground="#ffffff"
+        )
+        self._top_dl_btn.pack(side="right", padx=10)
+        self._top_dl_btn.config(state="disabled")
+
         self._server_status_lbl = tk.Label(
             top_bar, text="Tekshirilmoqda...", font=FONT_SMALL,
             fg=YELLOW, bg=CARD, padx=8, pady=3
         )
-        self._server_status_lbl.pack(side="right", padx=6)
+        self._server_status_lbl.pack(side="right", padx=4)
 
         tk.Frame(self, bg=CARD, height=1).pack(fill="x")
 
@@ -302,69 +325,66 @@ class VideoAnalyzerApp(tk.Tk):
         content.pack(fill="both", expand=True, padx=0, pady=0)
 
         left = self._build_left_panel(content)
-        left.pack(side="left", fill="y", padx=(10, 5), pady=10)
+        left.pack(side="left", fill="y", padx=(8, 4), pady=6)
 
         right = self._build_right_panel(content)
-        right.pack(side="left", fill="both", expand=True, padx=(5, 10), pady=10)
+        right.pack(side="left", fill="both", expand=True, padx=(4, 8), pady=6)
 
     def _build_left_panel(self, parent) -> tk.Frame:
         panel = self._styled_frame(parent, bg=BG2, width=310)
         panel.pack_propagate(False)
 
-        # 1. Execution Mode (Server vs Local)
+        # 1. Execution Mode
         self._section(panel, "🌐  Tahlil Rejimi")
         mode_f = self._styled_frame(panel)
-        mode_f.pack(fill="x", padx=10, pady=(0, 4))
+        mode_f.pack(fill="x", padx=8, pady=(0, 2))
 
-        r_server = tk.Radiobutton(
-            mode_f, text="🌐 Server orqali (REST API)", variable=self._mode_var,
+        m_row = tk.Frame(mode_f, bg=BG2)
+        m_row.pack(fill="x")
+        tk.Radiobutton(
+            m_row, text="🌐 Server", variable=self._mode_var,
             value="server", font=FONT_LABEL, fg=FG, bg=BG2,
             selectcolor=CARD, activebackground=BG2, activeforeground=FG
-        )
-        r_server.pack(anchor="w")
-
-        r_local = tk.Radiobutton(
-            mode_f, text="💻 Mahalliy (Lokal)", variable=self._mode_var,
+        ).pack(side="left", padx=(0, 10))
+        tk.Radiobutton(
+            m_row, text="💻 Lokal", variable=self._mode_var,
             value="local", font=FONT_LABEL, fg=FG, bg=BG2,
             selectcolor=CARD, activebackground=BG2, activeforeground=FG
-        )
-        r_local.pack(anchor="w")
+        ).pack(side="left")
 
-        # Server URL input
         url_row = tk.Frame(mode_f, bg=BG2)
-        url_row.pack(fill="x", pady=(3, 0))
-        tk.Label(url_row, text="Server:", font=FONT_SMALL, fg=FG2, bg=BG2).pack(side="left")
+        url_row.pack(fill="x", pady=(2, 2))
+        tk.Label(url_row, text="IP:", font=FONT_SMALL, fg=FG2, bg=BG2).pack(side="left")
         tk.Entry(
             url_row, textvariable=self._server_url_var, font=FONT_SMALL,
             bg=CARD, fg=FG, insertbackground=FG, bd=0
-        ).pack(side="right", fill="x", expand=True, padx=(4, 0))
+        ).pack(side="left", fill="x", expand=True, padx=(3, 3))
+        tk.Button(
+            url_row, text="🔌 Tekshir", command=self._test_server_connection,
+            bg=CARD, fg=FG, font=FONT_SMALL, bd=0, padx=4, pady=1, cursor="hand2"
+        ).pack(side="right")
 
-        # Test connection button
-        self._btn(mode_f, "🔌  Ulanishni tekshirish", self._test_server_connection, color=CARD).pack(
-            fill="x", pady=(4, 2)
-        )
-
-        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
+        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=8, pady=3)
 
         # 2. File Picker
         self._section(panel, "📁  Video Yuklash")
         self._btn(panel, "📂  Video Tanlash", self._pick_video, color=ACCENT).pack(
-            fill="x", padx=10, pady=(0, 4))
+            fill="x", padx=8, pady=(0, 2))
 
         info_f = self._styled_frame(panel)
-        info_f.pack(fill="x", padx=10, pady=(0, 6))
-        self._file_name_lbl = self._label(info_f, "Fayl tanlanmagan", fg=FG2)
+        info_f.pack(fill="x", padx=8, pady=(0, 3))
+        self._file_name_lbl = self._label(info_f, "Fayl tanlanmagan", fg=FG2, font=FONT_SMALL)
         self._file_name_lbl.pack(anchor="w")
-        self._file_info_lbl = self._label(info_f, "", fg=FG2, font=FONT_SMALL)
+        self._file_info_lbl = self._label(info_f, "", fg=GREEN, font=FONT_SMALL)
         self._file_info_lbl.pack(anchor="w")
 
-        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
+        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=8, pady=3)
 
         # 3. Models
         self._section(panel, "🤖  Modellar")
         for model_id, info in MODEL_INFO.items():
             row = tk.Frame(panel, bg=BG2)
-            row.pack(fill="x", padx=10, pady=2)
+            row.pack(fill="x", padx=8, pady=1)
             tk.Checkbutton(
                 row, text=info["label"],
                 variable=self._model_vars[model_id],
@@ -373,42 +393,44 @@ class VideoAnalyzerApp(tk.Tk):
                 activeforeground=FG, bd=0, highlightthickness=0
             ).pack(side="left")
             if info["slow"]:
-                tk.Label(row, text="(sekin)", font=FONT_SMALL, fg=YELLOW, bg=BG2).pack(side="left", padx=4)
+                tk.Label(row, text="(sekin)", font=FONT_SMALL, fg=YELLOW, bg=BG2).pack(side="left", padx=2)
 
-        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
+        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=8, pady=3)
 
         # 4. Settings
         self._section(panel, "⚙️  Sozlamalar")
         cfg_f = self._styled_frame(panel)
-        cfg_f.pack(fill="x", padx=10, pady=(0, 6))
+        cfg_f.pack(fill="x", padx=8, pady=(0, 3))
 
         for label, var, frm, to, inc, fmt in [
-            ("Har N-kadr tahlil:", self._every_n_var, 1, 30, 1, None),
+            ("Har N-kadr:", self._every_n_var, 1, 30, 1, None),
             ("Min ishonch:", self._conf_var, 0.1, 1.0, 0.05, "%.2f"),
         ]:
             row = tk.Frame(cfg_f, bg=BG2)
-            row.pack(fill="x", pady=2)
-            self._label(row, label, bg=BG2).pack(side="left")
+            row.pack(fill="x", pady=1)
+            self._label(row, label, bg=BG2, font=FONT_SMALL).pack(side="left")
             kw = dict(from_=frm, to=to, increment=inc, textvariable=var,
-                      width=6, bg=CARD, fg=FG, insertbackground=FG,
-                      buttonbackground=CARD, font=FONT_LABEL, bd=0)
+                      width=5, bg=CARD, fg=FG, insertbackground=FG,
+                      buttonbackground=CARD, font=FONT_SMALL, bd=0)
             if fmt:
                 kw["format"] = fmt
             tk.Spinbox(row, **kw).pack(side="right")
 
-        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
+        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=8, pady=3)
 
-        # 5. Controls
-        self._section(panel, "▶  Boshqaruv")
+        # 5. Controls & Main Download
+        self._section(panel, "▶  Boshqaruv & Yuklab Olish")
         ctrl_f = self._styled_frame(panel)
-        ctrl_f.pack(fill="x", padx=10, pady=(0, 4))
+        ctrl_f.pack(fill="x", padx=8, pady=(0, 2))
 
         self._start_btn = self._btn(ctrl_f, "▶  Tahlilni Boshlash", self._start_analysis, color=GREEN)
         self._start_btn.pack(fill="x", pady=2)
+
         self._stop_btn = self._btn(ctrl_f, "⏹  To'xtatish", self._stop_analysis, color=RED)
-        self._stop_btn.pack(fill="x", pady=2)
+        self._stop_btn.pack(fill="x", pady=1)
         self._stop_btn.config(state="disabled")
 
+        # Progress bar
         self._progress_var = tk.DoubleVar(value=0)
         style = ttk.Style()
         style.theme_use("clam")
@@ -416,27 +438,35 @@ class VideoAnalyzerApp(tk.Tk):
                         troughcolor=CARD, background=ACCENT,
                         darkcolor=ACCENT, lightcolor=ACCENT, bordercolor=BG2)
         ttk.Progressbar(panel, variable=self._progress_var, maximum=100,
-                        style="P.Horizontal.TProgressbar").pack(fill="x", padx=10, pady=(4, 2))
+                        style="P.Horizontal.TProgressbar").pack(fill="x", padx=8, pady=(3, 1))
         self._progress_lbl = self._label(panel, "Tayyor", fg=FG2, font=FONT_SMALL)
-        self._progress_lbl.pack(padx=10, anchor="w")
+        self._progress_lbl.pack(padx=8, anchor="w")
 
-        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
-
-        # 6. Downloads
-        self._section(panel, "⬇  Yuklab olish")
-        dl_f = self._styled_frame(panel)
-        dl_f.pack(fill="x", padx=10, pady=(0, 8))
-
-        self._dl_video_btn = self._btn(dl_f, "🎞  Annotated Video (MP4)", self._download_video, color=ACCENT2)
-        self._dl_video_btn.pack(fill="x", pady=2)
+        # Main Download Button inside Left Panel
+        self._dl_video_btn = tk.Button(
+            panel, text="💾  Videoni Yuklab Olish (MP4)",
+            command=self._download_video,
+            bg=GREEN, fg="#ffffff", font=("Segoe UI", 10, "bold"),
+            bd=0, relief="flat", cursor="hand2", pady=8, padx=6,
+            activebackground=GREEN, activeforeground="#ffffff"
+        )
+        self._dl_video_btn.pack(fill="x", padx=8, pady=(6, 2))
         self._dl_video_btn.config(state="disabled")
 
-        self._dl_csv_btn = self._btn(dl_f, "📋  Hisobot (CSV)", self._download_csv, color=ACCENT2)
-        self._dl_csv_btn.pack(fill="x", pady=2)
+        sub_dl_row = tk.Frame(panel, bg=BG2)
+        sub_dl_row.pack(fill="x", padx=8, pady=(0, 4))
+        self._dl_csv_btn = tk.Button(
+            sub_dl_row, text="📋 CSV", command=self._download_csv,
+            bg=CARD, fg=FG, font=FONT_SMALL, bd=0, padx=4, pady=2, cursor="hand2"
+        )
+        self._dl_csv_btn.pack(side="left", fill="x", expand=True, padx=(0, 2))
         self._dl_csv_btn.config(state="disabled")
 
-        self._dl_json_btn = self._btn(dl_f, "📄  JSON Natija", self._download_json, color=ACCENT2)
-        self._dl_json_btn.pack(fill="x", pady=2)
+        self._dl_json_btn = tk.Button(
+            sub_dl_row, text="📄 JSON", command=self._download_json,
+            bg=CARD, fg=FG, font=FONT_SMALL, bd=0, padx=4, pady=2, cursor="hand2"
+        )
+        self._dl_json_btn.pack(side="right", fill="x", expand=True, padx=(2, 0))
         self._dl_json_btn.config(state="disabled")
 
         return panel
@@ -444,14 +474,15 @@ class VideoAnalyzerApp(tk.Tk):
     def _build_right_panel(self, parent) -> tk.Frame:
         panel = self._styled_frame(parent, bg=BG)
         panel.columnconfigure(0, weight=1)
-        panel.rowconfigure(0, weight=2)
-        panel.rowconfigure(1, weight=1)
+        panel.rowconfigure(0, weight=3)
+        panel.rowconfigure(1, weight=2)
 
+        # Preview Card
         preview_card = tk.Frame(panel, bg=CARD, bd=0)
-        preview_card.grid(row=0, column=0, sticky="nsew", pady=(0, 6))
+        preview_card.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
 
         hdr = tk.Frame(preview_card, bg=CARD)
-        hdr.pack(fill="x", padx=10, pady=(8, 4))
+        hdr.pack(fill="x", padx=8, pady=(4, 2))
         tk.Label(hdr, text="🎞  Joriy Kadr Preview", font=("Segoe UI", 11, "bold"),
                  fg=FG, bg=CARD).pack(side="left")
         self._frame_lbl = tk.Label(hdr, text="—", font=FONT_SMALL, fg=FG2, bg=CARD)
@@ -459,26 +490,37 @@ class VideoAnalyzerApp(tk.Tk):
 
         self._canvas = tk.Canvas(preview_card, bg="#0a0a1a",
                                  width=PREVIEW_W, height=PREVIEW_H, highlightthickness=0)
-        self._canvas.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+        self._canvas.pack(fill="both", expand=True, padx=4, pady=(0, 4))
         self._photo: Optional[ImageTk.PhotoImage] = None
 
+        # Events Card
         events_card = tk.Frame(panel, bg=CARD, bd=0)
         events_card.grid(row=1, column=0, sticky="nsew")
 
         ehdr = tk.Frame(events_card, bg=CARD)
-        ehdr.pack(fill="x", padx=10, pady=(8, 4))
-        tk.Label(ehdr, text="📋  Aniqlangan Hodisalar", font=("Segoe UI", 11, "bold"),
+        ehdr.pack(fill="x", padx=8, pady=(4, 2))
+        tk.Label(ehdr, text="📋  Aniqlangan Hodisalar", font=("Segoe UI", 10, "bold"),
                  fg=FG, bg=CARD).pack(side="left")
+
+        # Download button right inside table header too!
+        self._table_dl_btn = tk.Button(
+            ehdr, text="💾 Videoni yuklab olish", command=self._download_video,
+            bg=GREEN, fg="#ffffff", font=("Segoe UI", 8, "bold"),
+            bd=0, padx=8, pady=1, cursor="hand2"
+        )
+        self._table_dl_btn.pack(side="right", padx=4)
+        self._table_dl_btn.config(state="disabled")
+
         self._event_count_lbl = tk.Label(ehdr, text="0 ta hodisa", font=FONT_SMALL, fg=FG2, bg=CARD)
-        self._event_count_lbl.pack(side="right")
+        self._event_count_lbl.pack(side="right", padx=6)
 
         tree_frame = tk.Frame(events_card, bg=CARD)
-        tree_frame.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+        tree_frame.pack(fill="both", expand=True, padx=4, pady=(0, 4))
 
         style = ttk.Style()
         style.configure("Dark.Treeview",
                         background=BG2, foreground=FG,
-                        fieldbackground=BG2, rowheight=22,
+                        fieldbackground=BG2, rowheight=20,
                         bordercolor=CARD, borderwidth=0, font=FONT_MONO)
         style.configure("Dark.Treeview.Heading",
                         background=CARD, foreground=FG,
@@ -487,10 +529,10 @@ class VideoAnalyzerApp(tk.Tk):
 
         cols = ("Frame", "Vaqt", "Model", "Natija", "Ishonch")
         self._tree = ttk.Treeview(tree_frame, columns=cols, show="headings",
-                                  style="Dark.Treeview", height=7)
-        for col, w in zip(cols, [70, 80, 120, 180, 80]):
+                                  style="Dark.Treeview", height=6)
+        for col, w in zip(cols, [65, 75, 110, 170, 75]):
             self._tree.heading(col, text=col)
-            self._tree.column(col, width=w, minwidth=40)
+            self._tree.column(col, width=w, minwidth=35)
 
         sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=sb.set)
@@ -500,15 +542,15 @@ class VideoAnalyzerApp(tk.Tk):
         return panel
 
     def _section(self, parent, text):
-        tk.Label(parent, text=text, font=("Segoe UI", 10, "bold"),
-                 fg=ACCENT, bg=BG2).pack(anchor="w", padx=10, pady=(8, 3))
+        tk.Label(parent, text=text, font=("Segoe UI", 9, "bold"),
+                 fg=ACCENT, bg=BG2).pack(anchor="w", padx=8, pady=(4, 1))
 
     def _btn(self, parent, text, cmd, color=ACCENT):
         b = tk.Button(parent, text=text, command=cmd,
-                      bg=color, fg="#ffffff", font=("Segoe UI", 10, "bold"),
+                      bg=color, fg="#ffffff", font=("Segoe UI", 9, "bold"),
                       bd=0, relief="flat", cursor="hand2",
                       activebackground=color, activeforeground="#ffffff",
-                      pady=6, padx=6)
+                      pady=5, padx=4)
         b.bind("<Enter>", lambda e: b.config(bg=self._lighten(color)))
         b.bind("<Leave>", lambda e: b.config(bg=color))
         return b
@@ -529,7 +571,7 @@ class VideoAnalyzerApp(tk.Tk):
                         return
             except Exception:
                 pass
-            self._ui_queue.put(("server_status", "🔴 Server Offline (Lokal rejim)", YELLOW))
+            self._ui_queue.put(("server_status", "🔴 Server Offline (Lokal)", YELLOW))
 
         threading.Thread(target=_check, daemon=True).start()
 
@@ -547,7 +589,7 @@ class VideoAnalyzerApp(tk.Tk):
                         return
             except Exception as e:
                 self._ui_queue.put(("server_status", "🔴 Server Offline", RED))
-                self._ui_queue.put(("error_popup", f"Serverga ulanib bo'lmadi:\n{url}\n\nSabab: {e}\n\nServerni ishga tushirish uchun terminalda bering:\nuv run python video_server.py"))
+                self._ui_queue.put(("error_popup", f"Serverga ulanib bo'lmadi:\n{url}\n\nSabab: {e}\n\nServerni ishga tushirish: uv run python video_server.py"))
 
         threading.Thread(target=_check, daemon=True).start()
 
@@ -573,7 +615,7 @@ class VideoAnalyzerApp(tk.Tk):
         bn = os.path.basename(path)
         self._file_name_lbl.config(text=bn[:36] + "…" if len(bn) > 36 else bn, fg=FG)
         self._file_info_lbl.config(
-            text=f"{w}x{h}  |  {fps:.1f} fps  |  {n} kadr  |  {_sec_to_hms(dur)}", fg=GREEN)
+            text=f"{w}x{h} | {fps:.1f} fps | {n} kadr | {_sec_to_hms(dur)}")
         self._reset_results()
 
     def _reset_results(self):
@@ -585,10 +627,13 @@ class VideoAnalyzerApp(tk.Tk):
         for item in self._tree.get_children():
             self._tree.delete(item)
         self._event_count_lbl.config(text="0 ta hodisa")
-        for b in (self._dl_video_btn, self._dl_csv_btn, self._dl_json_btn):
-            b.config(state="disabled")
+        self._set_download_state("disabled")
         self._canvas.delete("all")
         self._frame_lbl.config(text="—")
+
+    def _set_download_state(self, state: str):
+        for b in (self._top_dl_btn, self._dl_video_btn, self._table_dl_btn, self._dl_csv_btn, self._dl_json_btn):
+            b.config(state=state)
 
     def _start_analysis(self):
         if not self._video_path:
@@ -626,7 +671,7 @@ class VideoAnalyzerApp(tk.Tk):
         self._start_btn.config(state="normal")
         self._stop_btn.config(state="disabled")
 
-    # --- Server Mode Analysis ---
+    # --- Server Mode ---
     def _run_server_analysis(self):
         server_url = self._server_url_var.get().strip().rstrip("/")
         self._ui_queue.put(("status", "🌐 Serverga video yuklanmoqda…"))
@@ -636,16 +681,13 @@ class VideoAnalyzerApp(tk.Tk):
         every_n = self._every_n_var.get()
         conf = self._conf_var.get()
 
-        # Build multipart/form-data request using standard library
         boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
         filename = os.path.basename(self._video_path)
 
         body_parts = []
-        # Form fields
         for field_name, val in [("models", models_str), ("every_n", str(every_n)), ("conf", f"{conf:.2f}")]:
             body_parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field_name}\"\r\n\r\n{val}\r\n".encode("utf-8"))
 
-        # File field
         file_header = f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: video/mp4\r\n\r\n".encode("utf-8")
         file_footer = f"\r\n--{boundary}--\r\n".encode("utf-8")
 
@@ -672,7 +714,6 @@ class VideoAnalyzerApp(tk.Tk):
 
         self._ui_queue.put(("status", f"🌐 Serverda tahlil ketmoqda (Job: {job_id})…"))
 
-        # Polling loop
         last_event_count = 0
         while not self._stop_event.is_set():
             time.sleep(0.25)
@@ -687,7 +728,7 @@ class VideoAnalyzerApp(tk.Tk):
                 tf = s_data.get("total_frames", 1)
                 ev_cnt = s_data.get("events_count", 0)
 
-                # Fetch preview JPEG
+                # Fetch preview frame
                 try:
                     prev_req = urllib.request.Request(f"{server_url}/api/video/preview/{job_id}")
                     with urllib.request.urlopen(prev_req, timeout=1.5) as p_resp:
@@ -701,7 +742,7 @@ class VideoAnalyzerApp(tk.Tk):
                 except Exception:
                     self._ui_queue.put(("progress", pct, cf, tf, None))
 
-                # Fetch new events if count increased
+                # Fetch new events
                 if ev_cnt > last_event_count:
                     try:
                         ev_req = urllib.request.Request(f"{server_url}/api/video/events/{job_id}")
@@ -715,7 +756,6 @@ class VideoAnalyzerApp(tk.Tk):
                         pass
 
                 if st == "completed":
-                    # Get final events
                     try:
                         ev_req = urllib.request.Request(f"{server_url}/api/video/events/{job_id}")
                         with urllib.request.urlopen(ev_req, timeout=2.0) as ev_resp:
@@ -733,10 +773,10 @@ class VideoAnalyzerApp(tk.Tk):
                     self._ui_queue.put(("stopped", self._events))
                     break
 
-            except Exception as e:
+            except Exception:
                 time.sleep(0.5)
 
-    # --- Local Mode Analysis ---
+    # --- Local Mode ---
     def _run_local_analysis(self):
         from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
 
@@ -844,7 +884,7 @@ class VideoAnalyzerApp(tk.Tk):
                 self._handle_ui_msg(msg)
         except queue.Empty:
             pass
-        self.after(80, self._poll_ui_queue)
+        self.after(50, self._poll_ui_queue)
 
     def _handle_ui_msg(self, msg):
         kind = msg[0]
@@ -870,15 +910,14 @@ class VideoAnalyzerApp(tk.Tk):
         elif kind == "done":
             _, events, out_path = msg
             self._events = events
-            self._output_video_path = out_path
+            self._output_video_path = out_path if not out_path.startswith("server://") else None
             self._progress_var.set(100)
             self._progress_lbl.config(text=f"✅ Tayyor! {len(events)} ta hodisa aniqlandi.")
             self._running = False
             self._start_btn.config(state="normal")
             self._stop_btn.config(state="disabled")
             self._populate_tree(events)
-            for b in (self._dl_video_btn, self._dl_csv_btn, self._dl_json_btn):
-                b.config(state="normal")
+            self._set_download_state("normal")
 
         elif kind == "stopped":
             _, events = msg
@@ -933,6 +972,7 @@ class VideoAnalyzerApp(tk.Tk):
 
     def _download_video(self):
         dest = filedialog.asksaveasfilename(
+            title="Tahlil qilingan videoni saqlash",
             defaultextension=".mp4",
             filetypes=[("MP4 Video", "*.mp4")],
             initialfile="analyzed_video.mp4",
@@ -945,7 +985,8 @@ class VideoAnalyzerApp(tk.Tk):
             try:
                 dl_url = f"{server_url}/api/video/download/{self._active_job_id}"
                 urllib.request.urlretrieve(dl_url, dest)
-                messagebox.showinfo("Muvaffaqiyat", f"Video serverdan yuklab olindi:\n{dest}")
+                self._output_video_path = dest
+                messagebox.showinfo("Muvaffaqiyat", f"Tahlil qilingan video saqlandi:\n{dest}")
                 return
             except Exception as e:
                 messagebox.showerror("Xatolik", f"Serverdan yuklab olishda xatolik: {e}")
@@ -954,7 +995,7 @@ class VideoAnalyzerApp(tk.Tk):
         if self._output_video_path and os.path.exists(self._output_video_path):
             import shutil
             shutil.copy2(self._output_video_path, dest)
-            messagebox.showinfo("Muvaffaqiyat", f"Video saqlandi:\n{dest}")
+            messagebox.showinfo("Muvaffaqiyat", f"Tahlil qilingan video saqlandi:\n{dest}")
 
     def _download_csv(self):
         if not self._events:
@@ -973,7 +1014,7 @@ class VideoAnalyzerApp(tk.Tk):
             try:
                 dl_url = f"{server_url}/api/video/download_csv/{self._active_job_id}"
                 urllib.request.urlretrieve(dl_url, dest)
-                messagebox.showinfo("Muvaffaqiyat", f"CSV hisobot serverdan yuklab olindi:\n{dest}")
+                messagebox.showinfo("Muvaffaqiyat", f"CSV hisobot saqlandi:\n{dest}")
                 return
             except Exception:
                 pass
@@ -1008,7 +1049,7 @@ class VideoAnalyzerApp(tk.Tk):
             try:
                 dl_url = f"{server_url}/api/video/download_json/{self._active_job_id}"
                 urllib.request.urlretrieve(dl_url, dest)
-                messagebox.showinfo("Muvaffaqiyat", f"JSON hisobot serverdan yuklab olindi:\n{dest}")
+                messagebox.showinfo("Muvaffaqiyat", f"JSON hisobot saqlandi:\n{dest}")
                 return
             except Exception:
                 pass

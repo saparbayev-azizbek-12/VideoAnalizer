@@ -91,39 +91,18 @@ FALL_CONFIRM_FRAMES = 4
 STANDING_MIN_FRAMES = 10
 
 def is_valid_person_crop(bbox_w: int, bbox_h: int) -> bool:
-    if bbox_h < MIN_PERSON_HEIGHT_PX:
+    if max(bbox_w, bbox_h) < 35:
         return False
-    if (bbox_w * bbox_h) < MIN_PERSON_AREA_PX:
+    if (bbox_w * bbox_h) < 600:
         return False
     return True
 
 def is_pose_reliable(landmarks) -> bool:
-    key_landmarks = [
-        mp_pose.PoseLandmark.LEFT_SHOULDER,
-        mp_pose.PoseLandmark.RIGHT_SHOULDER,
-        mp_pose.PoseLandmark.LEFT_ELBOW,
-        mp_pose.PoseLandmark.RIGHT_ELBOW,
-        mp_pose.PoseLandmark.LEFT_HIP,
-        mp_pose.PoseLandmark.RIGHT_HIP,
-        mp_pose.PoseLandmark.LEFT_KNEE,
-        mp_pose.PoseLandmark.RIGHT_KNEE,
-        mp_pose.PoseLandmark.LEFT_ANKLE,
-        mp_pose.PoseLandmark.RIGHT_ANKLE,
-        mp_pose.PoseLandmark.LEFT_WRIST,
-        mp_pose.PoseLandmark.RIGHT_WRIST,
-    ]
-    visible_key_count = sum(
-        1 for lm in key_landmarks if landmarks[lm.value].visibility >= VISIBILITY_MIN
-    )
-    visible_ratio = visible_key_count / len(key_landmarks)
-    needed_core = [
-        mp_pose.PoseLandmark.LEFT_SHOULDER,
-        mp_pose.PoseLandmark.RIGHT_SHOULDER,
-        mp_pose.PoseLandmark.LEFT_HIP,
-        mp_pose.PoseLandmark.RIGHT_HIP,
-    ]
-    core_visible = all(landmarks[lm.value].visibility >= VISIBILITY_MIN for lm in needed_core)
-    return (visible_ratio >= MIN_VISIBLE_LANDMARKS_RATIO) and core_visible
+    sh_vis = max(landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].visibility,
+                 landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].visibility)
+    hip_vis = max(landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].visibility,
+                  landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].visibility)
+    return sh_vis >= 0.25 and hip_vis >= 0.25
 
 def get_model() -> YOLO:
     global _YOLO_MODEL

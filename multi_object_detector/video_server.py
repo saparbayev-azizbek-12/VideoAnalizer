@@ -7,7 +7,7 @@ import time
 import uuid
 import shutil
 import threading
-from typing import Optional, Dict, List
+from typing import Optional
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse, StreamingResponse
@@ -215,47 +215,59 @@ def _analyze_frame_server(
                     x2, y2 = min(x2, w_f), min(y2, h_f)
                     if x2 <= x1 or y2 <= y1:
                         continue
+                    bw, bh = x2 - x1, y2 - y1
+                    if max(bw, bh) < 30 or (bw * bh) < 500:
+                        continue
+
                     state = fall_track_states.setdefault(track_id, fall_detector.TrackState())
                     state.last_seen_frame = frame_idx
-                    bw, bh = x2 - x1, y2 - y1
-                    if not fall_detector.is_valid_person_crop(bw, bh):
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (128, 128, 128), 1)
-                        continue
-                    crop = annotated[y1:y2, x1:x2].copy()
+                    ar = bh / max(bw, 1)
+
+                    # Padded crop for MediaPipe context
+                    pad_x = int(bw * 0.20)
+                    pad_y = int(bh * 0.20)
+                    cx1 = max(0, x1 - pad_x)
+                    cy1 = max(0, y1 - pad_y)
+                    cx2 = min(w_f, x2 + pad_x)
+                    cy2 = min(h_f, y2 + pad_y)
+                    crop = annotated[cy1:cy2, cx1:cx2].copy()
                     crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                     pr = fall_pose.process(crop_rgb)
+
                     posture = "Unknown"
                     smoothed_angle = 0.0
+
                     if pr.pose_landmarks:
                         lms = pr.pose_landmarks.landmark
-                        if fall_detector.is_pose_reliable(lms):
-                            ch, cw = crop.shape[:2]
-                            shoulders = [
-                                (lms[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x * cw,
-                                 lms[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y * ch),
-                                (lms[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x * cw,
-                                 lms[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y * ch),
-                            ]
-                            hips = [
-                                (lms[mp_pose.PoseLandmark.LEFT_HIP.value].x * cw,
-                                 lms[mp_pose.PoseLandmark.LEFT_HIP.value].y * ch),
-                                (lms[mp_pose.PoseLandmark.RIGHT_HIP.value].x * cw,
-                                 lms[mp_pose.PoseLandmark.RIGHT_HIP.value].y * ch),
-                            ]
-                            sc = ((shoulders[0][0] + shoulders[1][0]) / 2,
-                                  (shoulders[0][1] + shoulders[1][1]) / 2)
-                            hc = ((hips[0][0] + hips[1][0]) / 2,
-                                  (hips[0][1] + hips[1][1]) / 2)
-                            angle = fall_detector.calculate_angle(hc, sc)
+                        cw = cx2 - cx1
+                        ch = cy2 - cy1
+                        l_sh = lms[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+                        r_sh = lms[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+                        l_hip = lms[mp_pose.PoseLandmark.LEFT_HIP.value]
+                        r_hip = lms[mp_pose.PoseLandmark.RIGHT_HIP.value]
+
+                        sh_vis = max(l_sh.visibility, r_sh.visibility)
+                        hip_vis = max(l_hip.visibility, r_hip.visibility)
+
+                        if sh_vis >= 0.20 and hip_vis >= 0.20:
+                            sh_x = (l_sh.x if l_sh.visibility >= r_sh.visibility else r_sh.x) * cw
+                            sh_y = (l_sh.y if l_sh.visibility >= r_sh.visibility else r_sh.y) * ch
+                            if l_sh.visibility >= 0.20 and r_sh.visibility >= 0.20:
+                                sh_x = (l_sh.x + r_sh.x) * 0.5 * cw
+                                sh_y = (l_sh.y + r_sh.y) * 0.5 * ch
+
+                            hip_x = (l_hip.x if l_hip.visibility >= r_hip.visibility else r_hip.x) * cw
+                            hip_y = (l_hip.y if l_hip.visibility >= r_hip.visibility else r_hip.y) * ch
+                            if l_hip.visibility >= 0.20 and r_hip.visibility >= 0.20:
+                                hip_x = (l_hip.x + r_hip.x) * 0.5 * cw
+                                hip_y = (l_hip.y + r_hip.y) * 0.5 * ch
+
+                            dy = hip_y - sh_y
+                            dx = hip_x - sh_x
+                            angle = abs(90.0 - np.degrees(math.atan2(dy, dx)))
                             state.angle_history.append(angle)
                             smoothed_angle = float(np.median(state.angle_history))
                             posture = fall_detector.classify_posture(smoothed_angle)
-                            hip_y_abs = y1 + hc[1]
-                            state.hip_history.append((frame_idx, hip_y_abs, bh))
-                            ar = bh / max(bw, 1)
-                            state.aspect_history.append((frame_idx, ar))
-                            vel = fall_detector._vertical_velocity(state.hip_history, fps)
-                            adrop = fall_detector._aspect_dropped(state.aspect_history, fps)
 
                             mp_drawing.draw_landmarks(
                                 crop,
@@ -264,34 +276,36 @@ def _analyze_frame_server(
                                 mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2, circle_radius=2),
                                 mp_drawing.DrawingSpec(color=(0, 128, 255), thickness=2, circle_radius=2),
                             )
-                            annotated[y1:y2, x1:x2] = crop
+                            annotated[cy1:cy2, cx1:cx2] = crop
 
-                            if posture in ("Falling", "Lying Down"):
-                                state.falling_count += 1
-                            else:
-                                state.falling_count = 0
-                            min_f = fall_detector.FALL_MIN_FRAMES_RATIO * fps
-                            max_f = fall_detector.FALL_MAX_FRAMES_RATIO * fps
-                            can_trigger = (
-                                min_f <= state.falling_count <= max_f
-                                and (vel >= fall_detector.VELOCITY_THRESHOLD) and adrop
-                                and state.standing_frames >= fall_detector.STANDING_MIN_FRAMES
-                            )
-                            if can_trigger:
-                                state.confirm_count += 1
-                            else:
-                                state.confirm_count = max(0, state.confirm_count - 1)
-                            if state.confirm_count >= fall_detector.FALL_CONFIRM_FRAMES:
-                                if not state.fall_detected:
-                                    events.append({"frame": frame_idx, "ts": round(ts, 3), "model": "fall",
-                                                   "label": "FALL_DETECTED", "conf": None})
-                                state.fall_detected = True
-                            if posture == "Standing":
-                                state.fall_detected = False
-                                state.confirm_count = 0
-                                state.standing_frames += 1
-                            else:
-                                state.standing_frames = 0
+                    # Geometric Aspect-Ratio Fallback
+                    if posture == "Unknown":
+                        if ar <= 0.85:
+                            posture = "Lying Down"
+                            smoothed_angle = max(65.0, 90.0 - (ar * 45.0))
+                        elif ar <= 1.15:
+                            posture = "Falling"
+                            smoothed_angle = 45.0
+                        else:
+                            posture = "Standing"
+                            smoothed_angle = 15.0
+
+                    if posture in ("Falling", "Lying Down") or ar < 0.90:
+                        state.falling_count += 1
+                    else:
+                        state.falling_count = max(0, state.falling_count - 1)
+
+                    if state.falling_count >= 2:
+                        if not state.fall_detected:
+                            events.append({
+                                "frame": frame_idx, "ts": round(ts, 3), "model": "fall",
+                                "label": "FALL_DETECTED", "conf": None
+                            })
+                        state.fall_detected = True
+
+                    if posture == "Standing" and ar > 1.3:
+                        state.fall_detected = False
+                        state.falling_count = 0
 
                     is_fall = state.fall_detected or posture == "Falling"
                     if is_fall:
