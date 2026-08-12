@@ -205,34 +205,49 @@ def _analyze_frame_multi(
                             posture = "Standing"
                             smoothed_angle = 15.0
 
-                    if posture in ("Falling", "Lying Down") or ar < 0.90:
-                        state.falling_count += 1
-                    else:
-                        state.falling_count = max(0, state.falling_count - 1)
+                    state.posture_history.append((frame_idx, posture))
+                    recent_postures = [p for (f, p) in state.posture_history if frame_idx - f <= 45]
+                    has_standing = "Standing" in recent_postures
+                    has_falling = "Falling" in recent_postures
+                    is_transition_to_fall = (has_standing and posture in ("Falling", "Lying Down")) or (has_falling and posture == "Lying Down")
 
-                    if state.falling_count >= 2:
+                    # 5 consecutive frames verification
+                    if posture in ("Falling", "Lying Down") or ar < 0.90:
+                        state.falled_count += 1
+                        state.standing_frames = 0
+                    else:
+                        state.falled_count = max(0, state.falled_count - 1)
+                        state.standing_frames += 1
+
+                    # Evaluate as "FALLED" when posture change is confirmed over 5 consecutive frames
+                    if (is_transition_to_fall or state.is_falled or state.falled_count >= 8) and state.falled_count >= 5:
+                        state.is_falled = True
                         if not state.fall_detected:
                             events.append({
                                 "frame": frame_idx, "ts": round(ts, 3), "model": "fall",
-                                "label": "FALL_DETECTED", "conf": None
+                                "label": "FALLED", "conf": None
                             })
-                        state.fall_detected = True
+                            state.fall_detected = True
 
-                    if posture == "Standing" and ar > 1.3:
+                    # Recovery reset when standing back up
+                    if posture == "Standing" and state.standing_frames >= 10 and ar > 1.25:
+                        state.is_falled = False
                         state.fall_detected = False
-                        state.falling_count = 0
+                        state.falled_count = 0
 
-                    is_fall = state.fall_detected or posture == "Falling"
-                    if is_fall:
+                    if state.is_falled or state.fall_detected:
                         any_fall_detected = True
                         box_color = (0, 0, 255)
-                        lbl_text = f"ID{track_id}: FALL ({smoothed_angle:.0f}deg)"
+                        lbl_text = f"ID{track_id}: FALLED ({smoothed_angle:.0f}deg)"
+                    elif posture == "Falling":
+                        box_color = (0, 140, 255)
+                        lbl_text = f"ID{track_id}: Falling ({smoothed_angle:.0f}deg)"
                     elif posture == "Lying Down":
                         box_color = (0, 140, 255)
                         lbl_text = f"ID{track_id}: Lying ({smoothed_angle:.0f}deg)"
                     else:
                         box_color = (0, 200, 60)
-                        lbl_text = f"ID{track_id}: {posture} ({smoothed_angle:.0f}deg)"
+                        lbl_text = f"ID{track_id}: Standing ({smoothed_angle:.0f}deg)"
 
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
                     (tw, th), bl = cv2.getTextSize(lbl_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)

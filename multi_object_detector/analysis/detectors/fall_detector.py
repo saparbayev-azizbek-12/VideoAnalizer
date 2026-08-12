@@ -145,9 +145,12 @@ class ProcessingResult:
 @dataclass
 class TrackState:
     angle_history: deque = field(default_factory=lambda: deque(maxlen=ANGLE_SMOOTH_WINDOW))
+    posture_history: deque = field(default_factory=lambda: deque(maxlen=30))
     hip_history: deque = field(default_factory=lambda: deque(maxlen=30))
     aspect_history: deque = field(default_factory=lambda: deque(maxlen=30))
     falling_count: int = 0
+    falled_count: int = 0
+    is_falled: bool = False
     fall_detected: bool = False
     last_seen_frame: int = 0
     confirm_count: int = 0
