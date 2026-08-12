@@ -14,7 +14,7 @@ from multi_object_detector.analysis import models_manager, frame_filter
 from multi_object_detector.analysis.detectors import fall_detector, danger_zone_detector
 
 
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;discardcorrupt"
 
 @dataclass
 class CameraEvent:
@@ -35,9 +35,10 @@ class CameraWorker:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._last_error: Optional[str] = None
+        self._stream_filter = frame_filter.StreamCorruptionFilter(camera_id=cam_id)
         self.events: deque = deque(maxlen=300)
         self.frame_idx = 0
-        self.fps_estimate = 25.0
+        self.fps_estimate = 10.0
         self._last_frame_time: Optional[float] = None
         self._fall_model = None
         self._fall_pose = None
@@ -143,6 +144,13 @@ class CameraWorker:
                 cap.release()
                 cap = None
                 time.sleep(config.CAMERA_RECONNECT_DELAY_SEC)
+                continue
+
+            is_valid, corrupt_reason = self._stream_filter.check_frame(frame)
+            if not is_valid:
+                with self._lock:
+                    self._connected = True
+                    self._last_error = f"Buzilgan kadr o'tkazib yuborildi ({corrupt_reason})"
                 continue
 
             self._update_fps_estimate()
