@@ -1,13 +1,18 @@
 from __future__ import annotations
 import os
-import sys
-import csv
 import cv2
+import csv
+import sys
+import time
+import uuid
 import json
 import queue
 import threading
 import numpy as np
+import urllib.parse
+import urllib.error
 import tkinter as tk
+import urllib.request
 from typing import Optional
 from PIL import Image, ImageTk
 from tkinter import filedialog, messagebox, ttk
@@ -38,6 +43,7 @@ FONT_MONO = ("Consolas", 9)
 
 PREVIEW_W = 640
 PREVIEW_H = 380
+DEFAULT_SERVER_URL = "http://10.0.89.251:8000"
 
 MODEL_INFO = {
     "fire": {"label": "🔥 Yong'in / Tutun", "slow": False},
@@ -67,13 +73,14 @@ def _analyze_frame_multi(
     from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
     annotated = frame.copy()
     events = []
-    ts = frame_idx / max(fps, 1)
+    ts = frame_idx / max(fps, 1.0)
+    h_f, w_f = annotated.shape[:2]
 
+    # 1. Fire / Smoke
     if models_enabled.get("fire") and _fire_model is not None:
-        proc, mdl = _fire_model
         try:
             ann, det_events, has_fire, has_smoke = fire_detector.detect_fire_frame(
-                annotated, model=(proc, mdl),
+                annotated, model=_fire_model,
                 conf_threshold=config.VIT_FIRE_CONF_THRESHOLD,
                 fire_conf_threshold=config.VIT_FIRE_CONF_THRESHOLD,
                 min_color_ratio=fire_detector._MIN_FIRE_PIXEL_RATIO,
@@ -86,6 +93,7 @@ def _analyze_frame_multi(
         except Exception:
             pass
 
+    # 2. PPE Detection
     if models_enabled.get("ppe") and _ppe_model is not None:
         try:
             ann, violations, has_v = ppe_detector.analyze_ppe_frame(
@@ -101,13 +109,13 @@ def _analyze_frame_multi(
         except Exception:
             pass
 
+    # 3. Fall Detection
     if models_enabled.get("fall") and _fall_model is not None and _fall_pose is not None:
         import mediapipe as mp
         mp_drawing = mp.solutions.drawing_utils
         mp_pose = mp.solutions.pose
         any_fall_detected = False
         try:
-            h_f, w_f = annotated.shape[:2]
             results_det = _fall_model.track(
                 annotated, persist=True, classes=[0],
                 tracker="bytetrack.yaml", verbose=False
@@ -134,7 +142,6 @@ def _analyze_frame_multi(
                     pr = _fall_pose.process(crop_rgb)
                     posture = "Unknown"
                     smoothed_angle = 0.0
-                    vel = 0.0
                     if pr.pose_landmarks:
                         lms = pr.pose_landmarks.landmark
                         if fall_detector.is_pose_reliable(lms):
@@ -232,10 +239,10 @@ def _analyze_frame_multi(
 class VideoAnalyzerApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("🎬 Video Tahlil Tizimi")
+        self.title("🎬 Video Tahlil Tizimi (Client & Server)")
         self.configure(bg=BG)
-        self.geometry("1200x720")
-        self.minsize(900, 600)
+        self.geometry("1220x750")
+        self.minsize(960, 640)
         self.resizable(True, True)
 
         self._video_path: Optional[str] = None
@@ -250,10 +257,13 @@ class VideoAnalyzerApp(tk.Tk):
 
         self._events: list[dict] = []
         self._output_video_path: Optional[str] = None
+        self._active_job_id: Optional[str] = None
         self._total_frames = 0
 
         self._ui_queue: queue.Queue = queue.Queue()
 
+        self._mode_var = tk.StringVar(value="server")  # "server" | "local"
+        self._server_url_var = tk.StringVar(value=DEFAULT_SERVER_URL)
         self._model_vars: dict[str, tk.BooleanVar] = {
             "fire": tk.BooleanVar(value=True),
             "fall": tk.BooleanVar(value=False),
@@ -264,6 +274,7 @@ class VideoAnalyzerApp(tk.Tk):
 
         self._build_ui()
         self._poll_ui_queue()
+        self._check_server_status_async()
 
     def _styled_frame(self, parent, bg=None, **kwargs):
         return tk.Frame(parent, bg=bg or BG2, **kwargs)
@@ -273,12 +284,17 @@ class VideoAnalyzerApp(tk.Tk):
                         fg=fg or FG, bg=bg or BG2, **kw)
 
     def _build_ui(self):
-        top_bar = tk.Frame(self, bg=BG, pady=10)
-        top_bar.pack(fill="x")
+        top_bar = tk.Frame(self, bg=BG, pady=8)
+        top_bar.pack(fill="x", padx=10)
         tk.Label(top_bar, text="🎬  Video Tahlil Tizimi", font=("Segoe UI", 16, "bold"),
-                 fg=ACCENT, bg=BG).pack(side="left", padx=18)
-        tk.Label(top_bar, text="Backend'dan mustaqil  |  To'g'ridan-to'g'ri AI modellar",
-                 font=FONT_SMALL, fg=FG2, bg=BG).pack(side="left", padx=6)
+                 fg=ACCENT, bg=BG).pack(side="left")
+
+        # Server status badge
+        self._server_status_lbl = tk.Label(
+            top_bar, text="Tekshirilmoqda...", font=FONT_SMALL,
+            fg=YELLOW, bg=CARD, padx=8, pady=3
+        )
+        self._server_status_lbl.pack(side="right", padx=6)
 
         tk.Frame(self, bg=CARD, height=1).pack(fill="x")
 
@@ -292,15 +308,51 @@ class VideoAnalyzerApp(tk.Tk):
         right.pack(side="left", fill="both", expand=True, padx=(5, 10), pady=10)
 
     def _build_left_panel(self, parent) -> tk.Frame:
-        panel = self._styled_frame(parent, bg=BG2, width=295)
+        panel = self._styled_frame(parent, bg=BG2, width=310)
         panel.pack_propagate(False)
 
+        # 1. Execution Mode (Server vs Local)
+        self._section(panel, "🌐  Tahlil Rejimi")
+        mode_f = self._styled_frame(panel)
+        mode_f.pack(fill="x", padx=10, pady=(0, 4))
+
+        r_server = tk.Radiobutton(
+            mode_f, text="🌐 Server orqali (REST API)", variable=self._mode_var,
+            value="server", font=FONT_LABEL, fg=FG, bg=BG2,
+            selectcolor=CARD, activebackground=BG2, activeforeground=FG
+        )
+        r_server.pack(anchor="w")
+
+        r_local = tk.Radiobutton(
+            mode_f, text="💻 Mahalliy (Lokal)", variable=self._mode_var,
+            value="local", font=FONT_LABEL, fg=FG, bg=BG2,
+            selectcolor=CARD, activebackground=BG2, activeforeground=FG
+        )
+        r_local.pack(anchor="w")
+
+        # Server URL input
+        url_row = tk.Frame(mode_f, bg=BG2)
+        url_row.pack(fill="x", pady=(3, 0))
+        tk.Label(url_row, text="Server:", font=FONT_SMALL, fg=FG2, bg=BG2).pack(side="left")
+        tk.Entry(
+            url_row, textvariable=self._server_url_var, font=FONT_SMALL,
+            bg=CARD, fg=FG, insertbackground=FG, bd=0
+        ).pack(side="right", fill="x", expand=True, padx=(4, 0))
+
+        # Test connection button
+        self._btn(mode_f, "🔌  Ulanishni tekshirish", self._test_server_connection, color=CARD).pack(
+            fill="x", pady=(4, 2)
+        )
+
+        tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
+
+        # 2. File Picker
         self._section(panel, "📁  Video Yuklash")
         self._btn(panel, "📂  Video Tanlash", self._pick_video, color=ACCENT).pack(
             fill="x", padx=10, pady=(0, 4))
 
         info_f = self._styled_frame(panel)
-        info_f.pack(fill="x", padx=10, pady=(0, 8))
+        info_f.pack(fill="x", padx=10, pady=(0, 6))
         self._file_name_lbl = self._label(info_f, "Fayl tanlanmagan", fg=FG2)
         self._file_name_lbl.pack(anchor="w")
         self._file_info_lbl = self._label(info_f, "", fg=FG2, font=FONT_SMALL)
@@ -308,6 +360,7 @@ class VideoAnalyzerApp(tk.Tk):
 
         tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
 
+        # 3. Models
         self._section(panel, "🤖  Modellar")
         for model_id, info in MODEL_INFO.items():
             row = tk.Frame(panel, bg=BG2)
@@ -324,16 +377,17 @@ class VideoAnalyzerApp(tk.Tk):
 
         tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
 
+        # 4. Settings
         self._section(panel, "⚙️  Sozlamalar")
         cfg_f = self._styled_frame(panel)
-        cfg_f.pack(fill="x", padx=10, pady=(0, 8))
+        cfg_f.pack(fill="x", padx=10, pady=(0, 6))
 
         for label, var, frm, to, inc, fmt in [
             ("Har N-kadr tahlil:", self._every_n_var, 1, 30, 1, None),
             ("Min ishonch:", self._conf_var, 0.1, 1.0, 0.05, "%.2f"),
         ]:
             row = tk.Frame(cfg_f, bg=BG2)
-            row.pack(fill="x", pady=3)
+            row.pack(fill="x", pady=2)
             self._label(row, label, bg=BG2).pack(side="left")
             kw = dict(from_=frm, to=to, increment=inc, textvariable=var,
                       width=6, bg=CARD, fg=FG, insertbackground=FG,
@@ -344,9 +398,10 @@ class VideoAnalyzerApp(tk.Tk):
 
         tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
 
+        # 5. Controls
         self._section(panel, "▶  Boshqaruv")
         ctrl_f = self._styled_frame(panel)
-        ctrl_f.pack(fill="x", padx=10, pady=(0, 6))
+        ctrl_f.pack(fill="x", padx=10, pady=(0, 4))
 
         self._start_btn = self._btn(ctrl_f, "▶  Tahlilni Boshlash", self._start_analysis, color=GREEN)
         self._start_btn.pack(fill="x", pady=2)
@@ -367,9 +422,10 @@ class VideoAnalyzerApp(tk.Tk):
 
         tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=10, pady=4)
 
+        # 6. Downloads
         self._section(panel, "⬇  Yuklab olish")
         dl_f = self._styled_frame(panel)
-        dl_f.pack(fill="x", padx=10, pady=(0, 10))
+        dl_f.pack(fill="x", padx=10, pady=(0, 8))
 
         self._dl_video_btn = self._btn(dl_f, "🎞  Annotated Video (MP4)", self._download_video, color=ACCENT2)
         self._dl_video_btn.pack(fill="x", pady=2)
@@ -396,7 +452,7 @@ class VideoAnalyzerApp(tk.Tk):
 
         hdr = tk.Frame(preview_card, bg=CARD)
         hdr.pack(fill="x", padx=10, pady=(8, 4))
-        tk.Label(hdr, text="🎞  Joriy Kadr", font=("Segoe UI", 11, "bold"),
+        tk.Label(hdr, text="🎞  Joriy Kadr Preview", font=("Segoe UI", 11, "bold"),
                  fg=FG, bg=CARD).pack(side="left")
         self._frame_lbl = tk.Label(hdr, text="—", font=FONT_SMALL, fg=FG2, bg=CARD)
         self._frame_lbl.pack(side="right")
@@ -445,14 +501,14 @@ class VideoAnalyzerApp(tk.Tk):
 
     def _section(self, parent, text):
         tk.Label(parent, text=text, font=("Segoe UI", 10, "bold"),
-                 fg=ACCENT, bg=BG2).pack(anchor="w", padx=10, pady=(10, 4))
+                 fg=ACCENT, bg=BG2).pack(anchor="w", padx=10, pady=(8, 3))
 
     def _btn(self, parent, text, cmd, color=ACCENT):
         b = tk.Button(parent, text=text, command=cmd,
                       bg=color, fg="#ffffff", font=("Segoe UI", 10, "bold"),
                       bd=0, relief="flat", cursor="hand2",
                       activebackground=color, activeforeground="#ffffff",
-                      pady=7, padx=6)
+                      pady=6, padx=6)
         b.bind("<Enter>", lambda e: b.config(bg=self._lighten(color)))
         b.bind("<Leave>", lambda e: b.config(bg=color))
         return b
@@ -461,6 +517,39 @@ class VideoAnalyzerApp(tk.Tk):
         h = hex_color.lstrip("#")
         r, g, bl = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
         return f"#{min(255,r+30):02x}{min(255,g+30):02x}{min(255,bl+30):02x}"
+
+    def _check_server_status_async(self):
+        def _check():
+            url = self._server_url_var.get().strip().rstrip("/")
+            try:
+                req = urllib.request.Request(f"{url}/", headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                    if resp.status == 200:
+                        self._ui_queue.put(("server_status", "🟢 Server Online", GREEN))
+                        return
+            except Exception:
+                pass
+            self._ui_queue.put(("server_status", "🔴 Server Offline (Lokal rejim)", YELLOW))
+
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _test_server_connection(self):
+        url = self._server_url_var.get().strip().rstrip("/")
+        self._server_status_lbl.config(text="Tekshirilmoqda...", fg=YELLOW)
+
+        def _check():
+            try:
+                req = urllib.request.Request(f"{url}/", headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=2.5) as resp:
+                    if resp.status == 200:
+                        self._ui_queue.put(("server_status", "🟢 Server Online", GREEN))
+                        self._ui_queue.put(("toast", f"Muvaffaqiyatli: Server online va tayyor!\n\nManzil: {url}"))
+                        return
+            except Exception as e:
+                self._ui_queue.put(("server_status", "🔴 Server Offline", RED))
+                self._ui_queue.put(("error_popup", f"Serverga ulanib bo'lmadi:\n{url}\n\nSabab: {e}\n\nServerni ishga tushirish uchun terminalda bering:\nuv run python video_server.py"))
+
+        threading.Thread(target=_check, daemon=True).start()
 
     def _pick_video(self):
         path = filedialog.askopenfilename(
@@ -474,7 +563,7 @@ class VideoAnalyzerApp(tk.Tk):
         if not cap.isOpened():
             messagebox.showerror("Xatolik", "Video faylni ochib bo'lmadi!")
             return
-        fps = 10
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -482,7 +571,7 @@ class VideoAnalyzerApp(tk.Tk):
         cap.release()
         self._video_info = {"fps": fps, "w": w, "h": h, "n": n, "dur": dur}
         bn = os.path.basename(path)
-        self._file_name_lbl.config(text=bn[:40] + "…" if len(bn) > 40 else bn, fg=FG)
+        self._file_name_lbl.config(text=bn[:36] + "…" if len(bn) > 36 else bn, fg=FG)
         self._file_info_lbl.config(
             text=f"{w}x{h}  |  {fps:.1f} fps  |  {n} kadr  |  {_sec_to_hms(dur)}", fg=GREEN)
         self._reset_results()
@@ -490,6 +579,7 @@ class VideoAnalyzerApp(tk.Tk):
     def _reset_results(self):
         self._events = []
         self._output_video_path = None
+        self._active_job_id = None
         self._progress_var.set(0)
         self._progress_lbl.config(text="Tayyor")
         for item in self._tree.get_children():
@@ -507,25 +597,150 @@ class VideoAnalyzerApp(tk.Tk):
         if not any(v.get() for v in self._model_vars.values()):
             messagebox.showwarning("Ogohlantirish", "Kamida bitta modelni tanlang!")
             return
+
         self._reset_results()
         self._stop_event.clear()
         self._running = True
         self._start_btn.config(state="disabled")
         self._stop_btn.config(state="normal")
-        self._thread = threading.Thread(target=self._run_analysis, daemon=True)
+
+        mode = self._mode_var.get()
+        if mode == "server":
+            self._thread = threading.Thread(target=self._run_server_analysis, daemon=True)
+        else:
+            self._thread = threading.Thread(target=self._run_local_analysis, daemon=True)
         self._thread.start()
 
     def _stop_analysis(self):
         self._stop_event.set()
         self._running = False
+        if self._active_job_id:
+            server_url = self._server_url_var.get().strip().rstrip("/")
+            try:
+                req = urllib.request.Request(f"{server_url}/api/video/cancel/{self._active_job_id}", method="POST")
+                urllib.request.urlopen(req, timeout=2.0)
+            except Exception:
+                pass
+
         self._progress_lbl.config(text="To'xtatildi")
         self._start_btn.config(state="normal")
         self._stop_btn.config(state="disabled")
 
-    def _run_analysis(self):
+    # --- Server Mode Analysis ---
+    def _run_server_analysis(self):
+        server_url = self._server_url_var.get().strip().rstrip("/")
+        self._ui_queue.put(("status", "🌐 Serverga video yuklanmoqda…"))
+
+        models_list = [k for k, v in self._model_vars.items() if v.get()]
+        models_str = ",".join(models_list)
+        every_n = self._every_n_var.get()
+        conf = self._conf_var.get()
+
+        # Build multipart/form-data request using standard library
+        boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
+        filename = os.path.basename(self._video_path)
+
+        body_parts = []
+        # Form fields
+        for field_name, val in [("models", models_str), ("every_n", str(every_n)), ("conf", f"{conf:.2f}")]:
+            body_parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field_name}\"\r\n\r\n{val}\r\n".encode("utf-8"))
+
+        # File field
+        file_header = f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: video/mp4\r\n\r\n".encode("utf-8")
+        file_footer = f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        try:
+            with open(self._video_path, "rb") as f:
+                file_bytes = f.read()
+
+            full_body = b"".join(body_parts) + file_header + file_bytes + file_footer
+
+            upload_req = urllib.request.Request(
+                f"{server_url}/api/video/upload",
+                data=full_body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST"
+            )
+            with urllib.request.urlopen(upload_req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                job_id = data.get("job_id")
+                self._active_job_id = job_id
+
+        except Exception as e:
+            self._ui_queue.put(("error", f"Serverga ulanish xatosi:\n{e}\n\nServer ishlayaptimi (uv run python video_server.py)?"))
+            return
+
+        self._ui_queue.put(("status", f"🌐 Serverda tahlil ketmoqda (Job: {job_id})…"))
+
+        # Polling loop
+        last_event_count = 0
+        while not self._stop_event.is_set():
+            time.sleep(0.25)
+            try:
+                status_req = urllib.request.Request(f"{server_url}/api/video/status/{job_id}")
+                with urllib.request.urlopen(status_req, timeout=3.0) as resp:
+                    s_data = json.loads(resp.read().decode("utf-8"))
+
+                st = s_data.get("status")
+                pct = s_data.get("progress_pct", 0.0)
+                cf = s_data.get("current_frame", 0)
+                tf = s_data.get("total_frames", 1)
+                ev_cnt = s_data.get("events_count", 0)
+
+                # Fetch preview JPEG
+                try:
+                    prev_req = urllib.request.Request(f"{server_url}/api/video/preview/{job_id}")
+                    with urllib.request.urlopen(prev_req, timeout=1.5) as p_resp:
+                        if p_resp.status == 200:
+                            jpeg_bytes = p_resp.read()
+                            nparr = np.frombuffer(jpeg_bytes, np.uint8)
+                            frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                            self._ui_queue.put(("progress", pct, cf, tf, frame_bgr))
+                        else:
+                            self._ui_queue.put(("progress", pct, cf, tf, None))
+                except Exception:
+                    self._ui_queue.put(("progress", pct, cf, tf, None))
+
+                # Fetch new events if count increased
+                if ev_cnt > last_event_count:
+                    try:
+                        ev_req = urllib.request.Request(f"{server_url}/api/video/events/{job_id}")
+                        with urllib.request.urlopen(ev_req, timeout=2.0) as ev_resp:
+                            ev_data = json.loads(ev_resp.read().decode("utf-8"))
+                            events = ev_data.get("events", [])
+                            self._events = events
+                            self._ui_queue.put(("events_update", events))
+                            last_event_count = len(events)
+                    except Exception:
+                        pass
+
+                if st == "completed":
+                    # Get final events
+                    try:
+                        ev_req = urllib.request.Request(f"{server_url}/api/video/events/{job_id}")
+                        with urllib.request.urlopen(ev_req, timeout=2.0) as ev_resp:
+                            ev_data = json.loads(ev_resp.read().decode("utf-8"))
+                            self._events = ev_data.get("events", [])
+                    except Exception:
+                        pass
+                    self._ui_queue.put(("done", self._events, f"server://{job_id}"))
+                    break
+                elif st == "failed":
+                    err_msg = s_data.get("error_message", "Serverda xatolik yuz berdi")
+                    self._ui_queue.put(("error", f"Server xatoligi: {err_msg}"))
+                    break
+                elif st == "stopped":
+                    self._ui_queue.put(("stopped", self._events))
+                    break
+
+            except Exception as e:
+                time.sleep(0.5)
+
+    # --- Local Mode Analysis ---
+    def _run_local_analysis(self):
         from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
 
-        self._ui_queue.put(("status", "Modellar yuklanmoqda…"))
+        self._ui_queue.put(("status", "💻 Modellar yuklanmoqda (Lokal)…"))
 
         fire_m = None
         if self._model_vars["fire"].get():
@@ -561,7 +776,7 @@ class VideoAnalyzerApp(tk.Tk):
             self._ui_queue.put(("error", "Video ochilmadi"))
             return
 
-        fps = 10
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
@@ -576,7 +791,7 @@ class VideoAnalyzerApp(tk.Tk):
         events: list[dict] = []
         frame_idx = 0
 
-        self._ui_queue.put(("status", "Tahlil boshlandi…"))
+        self._ui_queue.put(("status", "💻 Tahlil boshlandi (Lokal)…"))
 
         try:
             while cap.isOpened():
@@ -586,7 +801,7 @@ class VideoAnalyzerApp(tk.Tk):
                 if not ret:
                     break
                 frame_idx += 1
-                pct = (frame_idx / total) * 100
+                pct = (frame_idx / total) * 100.0
 
                 valid, _ = filt.check_frame(frame)
                 if not valid:
@@ -633,8 +848,13 @@ class VideoAnalyzerApp(tk.Tk):
 
     def _handle_ui_msg(self, msg):
         kind = msg[0]
-        if kind == "status":
+        if kind == "server_status":
+            _, text, color = msg
+            self._server_status_lbl.config(text=text, fg=color)
+
+        elif kind == "status":
             self._progress_lbl.config(text=msg[1])
+
         elif kind == "progress":
             _, pct, fidx, total, frame = msg
             self._progress_var.set(pct)
@@ -642,18 +862,24 @@ class VideoAnalyzerApp(tk.Tk):
             self._frame_lbl.config(text=f"Kadr: {fidx} / {total}")
             if frame is not None:
                 self._show_frame(frame)
+
+        elif kind == "events_update":
+            _, events = msg
+            self._populate_tree(events)
+
         elif kind == "done":
             _, events, out_path = msg
             self._events = events
             self._output_video_path = out_path
             self._progress_var.set(100)
-            self._progress_lbl.config(text=f"Tayyor! {len(events)} ta hodisa aniqlandi.")
+            self._progress_lbl.config(text=f"✅ Tayyor! {len(events)} ta hodisa aniqlandi.")
             self._running = False
             self._start_btn.config(state="normal")
             self._stop_btn.config(state="disabled")
             self._populate_tree(events)
             for b in (self._dl_video_btn, self._dl_csv_btn, self._dl_json_btn):
                 b.config(state="normal")
+
         elif kind == "stopped":
             _, events = msg
             self._events = events
@@ -664,6 +890,13 @@ class VideoAnalyzerApp(tk.Tk):
             if events:
                 self._dl_csv_btn.config(state="normal")
                 self._dl_json_btn.config(state="normal")
+
+        elif kind == "toast":
+            messagebox.showinfo("Server holati", msg[1])
+
+        elif kind == "error_popup":
+            messagebox.showerror("Server holati", msg[1])
+
         elif kind == "error":
             self._running = False
             self._start_btn.config(state="normal")
@@ -699,15 +932,26 @@ class VideoAnalyzerApp(tk.Tk):
         self._event_count_lbl.config(text=f"{len(events)} ta hodisa")
 
     def _download_video(self):
-        if not self._output_video_path or not os.path.exists(self._output_video_path):
-            messagebox.showwarning("Ogohlantirish", "Tahlil qilingan video mavjud emas.")
-            return
         dest = filedialog.asksaveasfilename(
             defaultextension=".mp4",
             filetypes=[("MP4 Video", "*.mp4")],
-            initialfile=os.path.basename(self._output_video_path),
+            initialfile="analyzed_video.mp4",
         )
-        if dest:
+        if not dest:
+            return
+
+        if self._active_job_id and self._mode_var.get() == "server":
+            server_url = self._server_url_var.get().strip().rstrip("/")
+            try:
+                dl_url = f"{server_url}/api/video/download/{self._active_job_id}"
+                urllib.request.urlretrieve(dl_url, dest)
+                messagebox.showinfo("Muvaffaqiyat", f"Video serverdan yuklab olindi:\n{dest}")
+                return
+            except Exception as e:
+                messagebox.showerror("Xatolik", f"Serverdan yuklab olishda xatolik: {e}")
+                return
+
+        if self._output_video_path and os.path.exists(self._output_video_path):
             import shutil
             shutil.copy2(self._output_video_path, dest)
             messagebox.showinfo("Muvaffaqiyat", f"Video saqlandi:\n{dest}")
@@ -723,6 +967,17 @@ class VideoAnalyzerApp(tk.Tk):
         )
         if not dest:
             return
+
+        if self._active_job_id and self._mode_var.get() == "server":
+            server_url = self._server_url_var.get().strip().rstrip("/")
+            try:
+                dl_url = f"{server_url}/api/video/download_csv/{self._active_job_id}"
+                urllib.request.urlretrieve(dl_url, dest)
+                messagebox.showinfo("Muvaffaqiyat", f"CSV hisobot serverdan yuklab olindi:\n{dest}")
+                return
+            except Exception:
+                pass
+
         with open(dest, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=["frame", "ts", "model", "label", "conf"])
             writer.writeheader()
@@ -747,6 +1002,17 @@ class VideoAnalyzerApp(tk.Tk):
         )
         if not dest:
             return
+
+        if self._active_job_id and self._mode_var.get() == "server":
+            server_url = self._server_url_var.get().strip().rstrip("/")
+            try:
+                dl_url = f"{server_url}/api/video/download_json/{self._active_job_id}"
+                urllib.request.urlretrieve(dl_url, dest)
+                messagebox.showinfo("Muvaffaqiyat", f"JSON hisobot serverdan yuklab olindi:\n{dest}")
+                return
+            except Exception:
+                pass
+
         payload = {
             "video": self._video_path,
             "video_info": self._video_info,
