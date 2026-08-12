@@ -6,6 +6,7 @@ __pycache__
 *.pyc
 *.ipynb
 *.json
+*.log
 .env
 uv.lock
 videoanalizer.egg-info/
