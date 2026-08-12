@@ -126,6 +126,26 @@ def classify_posture(torso_angle: float,
     else:
         return "Falling"
 
+def check_5frame_transition(posture_history: deque) -> bool:
+    """
+    Checks if a 5-frame window exhibits a downward fall transition:
+    - 2 frames 'Standing' + 3 frames 'Falling'
+    - 1 frame 'Falling' + 4 frames 'Lying Down'
+    - 2 frames 'Standing' + 3 frames 'Lying Down'
+    - 1 frame 'Standing' + 2 frames 'Falling' + 2 frames 'Lying Down'
+    """
+    if len(posture_history) < 5:
+        return False
+    p5 = list(posture_history)[-5:]
+    if p5[-1] not in ("Falling", "Lying Down"):
+        return False
+    p_rank = {"Standing": 0, "Falling": 1, "Lying Down": 2}
+    r = [p_rank.get(p, 0) for p in p5]
+    start_min = min(r[0], r[1])
+    end_max = max(r[3], r[4])
+    downward_sum = sum(r[2:])
+    return (start_min < end_max) and (downward_sum >= 3)
+
 @dataclass
 class FallEvent:
     frame_index: int

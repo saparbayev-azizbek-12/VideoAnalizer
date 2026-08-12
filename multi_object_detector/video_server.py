@@ -290,13 +290,11 @@ def _analyze_frame_server(
                             posture = "Standing"
                             smoothed_angle = 15.0
 
-                    state.posture_history.append((frame_idx, posture))
-                    recent_postures = [p for (f, p) in state.posture_history if frame_idx - f <= 45]
-                    has_standing = "Standing" in recent_postures
-                    has_falling = "Falling" in recent_postures
-                    is_transition_to_fall = (has_standing and posture in ("Falling", "Lying Down")) or (has_falling and posture == "Lying Down")
+                    state.posture_history.append(posture)
 
-                    # 5 consecutive frames verification
+                    # 5-frame window transition check (e.g., 2 standing + 3 falling, 1 falling + 4 lying, etc.)
+                    is_transition_5f = fall_detector.check_5frame_transition(state.posture_history)
+
                     if posture in ("Falling", "Lying Down") or ar < 0.90:
                         state.falled_count += 1
                         state.standing_frames = 0
@@ -304,8 +302,8 @@ def _analyze_frame_server(
                         state.falled_count = max(0, state.falled_count - 1)
                         state.standing_frames += 1
 
-                    # Evaluate as "FALLED" when posture change is confirmed over 5 consecutive frames
-                    if (is_transition_to_fall or state.is_falled or state.falled_count >= 8) and state.falled_count >= 5:
+                    # Trigger "FALLED" on 5-frame transition or sustained fallen posture
+                    if is_transition_5f or (state.is_falled and (posture in ("Falling", "Lying Down") or ar < 1.0)):
                         state.is_falled = True
                         if not state.fall_detected:
                             events.append({
@@ -315,7 +313,7 @@ def _analyze_frame_server(
                             state.fall_detected = True
 
                     # Recovery reset when standing back up
-                    if posture == "Standing" and state.standing_frames >= 10 and ar > 1.25:
+                    if posture == "Standing" and state.standing_frames >= 8 and ar > 1.25:
                         state.is_falled = False
                         state.fall_detected = False
                         state.falled_count = 0
