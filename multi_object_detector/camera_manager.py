@@ -15,7 +15,7 @@ from multi_object_detector.analysis import models_manager, frame_filter
 from multi_object_detector.analysis.detectors import fall_detector, danger_zone_detector
 
 
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
 
 @dataclass
 class CameraEvent:
@@ -124,11 +124,13 @@ class CameraWorker:
 
     def _run(self) -> None:
         cap = None
+        consecutive_read_fails = 0
         while True:
             with self._lock:
                 if not self._running:
                     break
             if cap is None or not cap.isOpened():
+                consecutive_read_fails = 0
                 cap = self._open_capture()
                 if not cap.isOpened():
                     diag_err = stream_logger.log_connect_fail(self.id, self.name, self.source)
@@ -142,14 +144,22 @@ class CameraWorker:
 
             ok, frame = cap.read()
             if not ok or frame is None:
+                consecutive_read_fails += 1
+                if consecutive_read_fails < 5:
+                    time.sleep(0.01)
+                    continue
+
                 drop_err = stream_logger.log_stream_drop(self.id, self.name, self.source)
                 with self._lock:
                     self._connected = False
                     self._last_error = drop_err
                 cap.release()
                 cap = None
+                consecutive_read_fails = 0
                 time.sleep(config.CAMERA_RECONNECT_DELAY_SEC)
                 continue
+
+            consecutive_read_fails = 0
 
             self._update_fps_estimate()
             with self._lock:
