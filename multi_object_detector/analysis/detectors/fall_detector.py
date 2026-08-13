@@ -237,39 +237,85 @@ def _aspect_dropped(aspect_history: deque, fps: int) -> bool:
         return False
     return cur_ratio < recent_max * ASPECT_DROP_RATIO
 
+# Color palette for 17 COCO keypoints (BGR)
+KEYPOINT_COLORS = [
+    (0, 255, 255),  # 0: Nose (Yellow)
+    (255, 255, 0),  # 1: L-Eye (Cyan)
+    (255, 255, 0),  # 2: R-Eye (Cyan)
+    (255, 0, 255),  # 3: L-Ear (Magenta)
+    (255, 0, 255),  # 4: R-Ear (Magenta)
+    (0, 255, 0),    # 5: L-Shoulder (Green)
+    (0, 255, 0),    # 6: R-Shoulder (Green)
+    (0, 200, 255),  # 7: L-Elbow (Orange)
+    (255, 200, 0),  # 8: R-Elbow (Sky Blue)
+    (0, 100, 255),  # 9: L-Wrist (Dark Orange)
+    (255, 100, 0),  # 10: R-Wrist (Blue)
+    (0, 255, 128),  # 11: L-Hip (Spring Green)
+    (0, 255, 128),  # 12: R-Hip (Spring Green)
+    (0, 255, 255),  # 13: L-Knee (Yellow)
+    (255, 255, 0),  # 14: R-Knee (Cyan)
+    (0, 165, 255),  # 15: L-Ankle (Orange)
+    (255, 165, 0),  # 16: R-Ankle (Deep Cyan)
+]
+
+LIMB_COLORS = [
+    (0, 255, 255),  # 15-13: L-Ankle - L-Knee
+    (0, 255, 255),  # 13-11: L-Knee - L-Hip
+    (255, 255, 0),  # 16-14: R-Ankle - R-Knee
+    (255, 255, 0),  # 14-12: R-Knee - R-Hip
+    (0, 255, 0),    # 11-12: L-Hip - R-Hip
+    (0, 255, 0),    # 5-11: L-Shoulder - L-Hip
+    (0, 255, 0),    # 6-12: R-Shoulder - R-Hip
+    (0, 255, 0),    # 5-6: L-Shoulder - R-Shoulder
+    (0, 165, 255),  # 5-7: L-Shoulder - L-Elbow
+    (255, 0, 255),  # 6-8: R-Shoulder - R-Elbow
+    (0, 100, 255),  # 7-9: L-Elbow - L-Wrist
+    (255, 0, 128),  # 8-10: R-Elbow - R-Wrist
+    (255, 255, 0),  # 1-2: Eyes
+    (255, 255, 0),  # 0-1: Nose - L-Eye
+    (255, 255, 0),  # 0-2: Nose - R-Eye
+    (255, 255, 0),  # 1-3: L-Eye - L-Ear
+    (255, 255, 0),  # 2-4: R-Eye - R-Ear
+    (255, 255, 0),  # 3-5: L-Ear - L-Shoulder
+    (255, 255, 0),  # 4-6: R-Ear - R-Shoulder
+]
+
 def draw_pose_skeleton(
     image: np.ndarray,
     keypoints: np.ndarray,
     scores: np.ndarray,
-    kpt_thr: float = 0.25,
+    kpt_thr: float = 0.20,
+    draw_coords: bool = True,
 ) -> np.ndarray:
     """
-    Draws COCO-17 skeleton lines and keypoint circles on the given image.
-    Uses rtmlib.draw_skeleton when available, with a fast fallback.
+    Draws COCO-17 skeleton lines, keypoint circles, and coordinates on the given image.
     """
     if keypoints is None or scores is None or len(keypoints) == 0:
         return image
-    try:
-        from rtmlib import draw_skeleton
-        return draw_skeleton(image, keypoints, scores, kpt_thr=kpt_thr)
-    except Exception:
-        pass
 
     kpts = keypoints[0] if keypoints.ndim == 3 else keypoints
     scs = scores[0] if scores.ndim == 2 else scores
 
     # Draw skeleton connections
-    for p1_idx, p2_idx in SKELETON_CONNECTIONS:
+    for idx, (p1_idx, p2_idx) in enumerate(SKELETON_CONNECTIONS):
         if p1_idx < len(kpts) and p2_idx < len(kpts):
             if scs[p1_idx] >= kpt_thr and scs[p2_idx] >= kpt_thr:
                 pt1 = (int(round(kpts[p1_idx][0])), int(round(kpts[p1_idx][1])))
                 pt2 = (int(round(kpts[p2_idx][0])), int(round(kpts[p2_idx][1])))
-                cv2.line(image, pt1, pt2, (0, 255, 255), 2, cv2.LINE_AA)
+                color = LIMB_COLORS[idx] if idx < len(LIMB_COLORS) else (0, 255, 255)
+                cv2.line(image, pt1, pt2, color, 2, cv2.LINE_AA)
 
-    # Draw joint points
+    # Draw joint points and coordinates
     for idx, (x, y) in enumerate(kpts):
         if scs[idx] >= kpt_thr:
-            cv2.circle(image, (int(round(x)), int(round(y))), 3, (0, 128, 255), -1, cv2.LINE_AA)
+            px, py = int(round(x)), int(round(y))
+            color = KEYPOINT_COLORS[idx] if idx < len(KEYPOINT_COLORS) else (0, 255, 0)
+            cv2.circle(image, (px, py), 4, color, -1, cv2.LINE_AA)
+            cv2.circle(image, (px, py), 5, (255, 255, 255), 1, cv2.LINE_AA)
+
+            if draw_coords and idx in (KEYPOINT_LEFT_SHOULDER, KEYPOINT_RIGHT_SHOULDER, KEYPOINT_LEFT_HIP, KEYPOINT_RIGHT_HIP):
+                coord_text = f"({px},{py})"
+                cv2.putText(image, coord_text, (px + 4, py - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
 
     return image
 
@@ -330,11 +376,19 @@ class RTMPoseEstimator:
         if self._body is None:
             return np.empty((0, 17, 2)), np.empty((0, 17))
         try:
-            if bboxes is not None and hasattr(self._body, "pose_model"):
+            if hasattr(self._body, "pose_model"):
+                if bboxes is None:
+                    h, w = img.shape[:2]
+                    bboxes = np.array([[0, 0, w, h]], dtype=np.float32)
+                return self._body.pose_model(img, bboxes=bboxes)
+            if bboxes is not None:
                 return self._body(img, bboxes=bboxes)
             return self._body(img)
         except Exception as e:
-            return np.empty((0, 17, 2)), np.empty((0, 17))
+            try:
+                return self._body(img)
+            except Exception:
+                return np.empty((0, 17, 2)), np.empty((0, 17))
 
 def create_pose_instance(
     mode: Optional[str] = None,
@@ -405,6 +459,11 @@ def process_video(
                 if len(kpts) > 0 and len(scs) > 0:
                     kpt = kpts[0]
                     sc = scs[0]
+
+                    # Always draw RTMPose skeleton lines & coordinates on person crop
+                    draw_pose_skeleton(person_bbox, kpts, scs, kpt_thr=0.20, draw_coords=True)
+                    frame[y1:y2, x1:x2] = person_bbox
+
                     if is_pose_reliable(sc):
                         l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
                         r_sh = kpt[KEYPOINT_RIGHT_SHOULDER]
@@ -444,9 +503,15 @@ def process_video(
                         aspect_drop = _aspect_dropped(state.aspect_history, fps)
                         fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
 
-                        draw_pose_skeleton(person_bbox, kpts, scs, kpt_thr=0.25)
-                        label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}°) v={velocity:.2f}"
-                        cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+                        # Draw torso vector on full frame
+                        sh_pt = (int(x1 + shoulder_center[0]), int(y1 + shoulder_center[1]))
+                        hip_pt = (int(x1 + hip_center[0]), int(y1 + hip_center[1]))
+                        cv2.line(frame, sh_pt, hip_pt, (0, 0, 255), 3, cv2.LINE_AA)
+                        cv2.circle(frame, sh_pt, 5, (0, 255, 255), -1, cv2.LINE_AA)
+                        cv2.circle(frame, hip_pt, 5, (255, 0, 255), -1, cv2.LINE_AA)
+
+                        label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}deg) [x:{x1},y:{y1}] v={velocity:.2f}"
+                        cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2, cv2.LINE_AA)
 
                         if posture in ("Falling", "Lying Down"):
                             state.falling_count += 1
@@ -481,7 +546,6 @@ def process_video(
                         if state.fall_detected:
                             any_fall_this_frame = True
 
-                frame[y1:y2, x1:x2] = person_bbox
                 box_color = (0, 0, 255) if (posture == "Falling" and state.fall_detected) else (255, 0, 0)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
 
@@ -544,6 +608,11 @@ def process_fall_frame(
             if len(kpts) > 0 and len(scs) > 0:
                 kpt = kpts[0]
                 sc = scs[0]
+
+                # Always draw RTMPose skeleton lines & coordinates on person crop
+                draw_pose_skeleton(person_bbox, kpts, scs, kpt_thr=0.20, draw_coords=True)
+                frame[y1:y2, x1:x2] = person_bbox
+
                 if is_pose_reliable(sc):
                     l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
                     r_sh = kpt[KEYPOINT_RIGHT_SHOULDER]
@@ -583,9 +652,15 @@ def process_fall_frame(
                     aspect_drop = _aspect_dropped(state.aspect_history, fps)
                     fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
 
-                    draw_pose_skeleton(person_bbox, kpts, scs, kpt_thr=0.25)
-                    label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}°) v={velocity:.2f}"
-                    cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+                    # Draw torso vector on full frame
+                    sh_pt = (int(x1 + shoulder_center[0]), int(y1 + shoulder_center[1]))
+                    hip_pt = (int(x1 + hip_center[0]), int(y1 + hip_center[1]))
+                    cv2.line(frame, sh_pt, hip_pt, (0, 0, 255), 3, cv2.LINE_AA)
+                    cv2.circle(frame, sh_pt, 5, (0, 255, 255), -1, cv2.LINE_AA)
+                    cv2.circle(frame, hip_pt, 5, (255, 0, 255), -1, cv2.LINE_AA)
+
+                    label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}deg) [x:{x1},y:{y1}] v={velocity:.2f}"
+                    cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2, cv2.LINE_AA)
 
                     if posture in ("Falling", "Lying Down"):
                         state.falling_count += 1
@@ -620,7 +695,6 @@ def process_fall_frame(
                     if state.fall_detected:
                         any_fall_this_frame = True
 
-            frame[y1:y2, x1:x2] = person_bbox
             box_color = (0, 0, 255) if (posture == "Falling" and state.fall_detected) else (255, 0, 0)
             cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
 

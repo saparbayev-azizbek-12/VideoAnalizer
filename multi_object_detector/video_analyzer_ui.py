@@ -151,6 +151,11 @@ def _analyze_frame_multi(
                     if len(kpts) > 0 and len(scs) > 0:
                         kpt = kpts[0]
                         sc = scs[0]
+
+                        # Always draw RTMPose skeleton lines and coordinates on crop
+                        fall_detector.draw_pose_skeleton(crop, kpts, scs, kpt_thr=0.20, draw_coords=True)
+                        annotated[cy1:cy2, cx1:cx2] = crop
+
                         if fall_detector.is_pose_reliable(sc):
                             l_sh = kpt[fall_detector.KEYPOINT_LEFT_SHOULDER]
                             r_sh = kpt[fall_detector.KEYPOINT_RIGHT_SHOULDER]
@@ -189,8 +194,12 @@ def _analyze_frame_multi(
                             smoothed_angle = float(np.median(state.angle_history))
                             posture = fall_detector.classify_posture(smoothed_angle)
 
-                            fall_detector.draw_pose_skeleton(crop, kpts, scs, kpt_thr=0.25)
-                            annotated[cy1:cy2, cx1:cx2] = crop
+                            # Draw torso line and center points on full frame
+                            g_sh = (int(cx1 + sh_x), int(cy1 + sh_y))
+                            g_hip = (int(cx1 + hip_x), int(cy1 + hip_y))
+                            cv2.line(annotated, g_sh, g_hip, (0, 0, 255), 3, cv2.LINE_AA)
+                            cv2.circle(annotated, g_sh, 5, (0, 255, 255), -1, cv2.LINE_AA)
+                            cv2.circle(annotated, g_hip, 5, (255, 0, 255), -1, cv2.LINE_AA)
 
                     # Geometric Aspect-Ratio Fallback
                     if posture == "Unknown":
@@ -235,16 +244,16 @@ def _analyze_frame_multi(
                     if state.is_falled or state.fall_detected:
                         any_fall_detected = True
                         box_color = (0, 0, 255)
-                        lbl_text = f"ID{track_id}: FALLED ({smoothed_angle:.0f}deg)"
+                        lbl_text = f"ID{track_id}: FALLED ({smoothed_angle:.0f}deg) [x:{x1},y:{y1}]"
                     elif posture == "Falling":
                         box_color = (0, 140, 255)
-                        lbl_text = f"ID{track_id}: Falling ({smoothed_angle:.0f}deg)"
+                        lbl_text = f"ID{track_id}: Falling ({smoothed_angle:.0f}deg) [x:{x1},y:{y1}]"
                     elif posture == "Lying Down":
                         box_color = (0, 140, 255)
-                        lbl_text = f"ID{track_id}: Lying ({smoothed_angle:.0f}deg)"
+                        lbl_text = f"ID{track_id}: Lying ({smoothed_angle:.0f}deg) [x:{x1},y:{y1}]"
                     else:
                         box_color = (0, 200, 60)
-                        lbl_text = f"ID{track_id}: Standing ({smoothed_angle:.0f}deg)"
+                        lbl_text = f"ID{track_id}: Standing ({smoothed_angle:.0f}deg) [x:{x1},y:{y1}]"
 
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
                     (tw, th), bl = cv2.getTextSize(lbl_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
