@@ -9,13 +9,13 @@ import supervision as sv
 from pathlib import Path
 from ultralytics import YOLO
 from collections import deque
-from typing import Callable, Optional, Tuple, List, Union, Any
 from dataclasses import dataclass, field
+from typing import Callable, Optional, Any
+
 from multi_object_detector import config
 from multi_object_detector.system_logger import sys_logger
 
 
-# COCO-17 Keypoint Indices for RTMPose
 KEYPOINT_NOSE = 0
 KEYPOINT_LEFT_EYE = 1
 KEYPOINT_RIGHT_EYE = 2
@@ -34,7 +34,6 @@ KEYPOINT_RIGHT_KNEE = 14
 KEYPOINT_LEFT_ANKLE = 15
 KEYPOINT_RIGHT_ANKLE = 16
 
-# COCO-17 Skeleton joint pairs (start_idx, end_idx)
 SKELETON_CONNECTIONS = [
     (15, 13), (13, 11), (16, 14), (14, 12), (11, 12),
     (5, 11), (6, 12), (5, 6), (5, 7), (6, 8),
@@ -42,7 +41,6 @@ SKELETON_CONNECTIONS = [
     (1, 3), (2, 4), (3, 5), (4, 6)
 ]
 
-_YOLO_MODEL: Optional[YOLO] = None
 BASE_DIR = Path(__file__).resolve().parent.parent
 LOCAL_CALIB_PATH = str(BASE_DIR / "models" / "calib.npz")
 
@@ -123,9 +121,6 @@ def is_valid_person_crop(bbox_w: int, bbox_h: int) -> bool:
     return True
 
 def is_pose_reliable(scores: np.ndarray, threshold: float = 0.25) -> bool:
-    """
-    Checks if shoulder and hip keypoints have sufficient confidence score in RTMPose.
-    """
     if scores is None or len(scores) < 13:
         return False
     if scores.ndim > 1:
@@ -234,7 +229,7 @@ def _vertical_velocity(hip_history: deque, fps: int) -> float:
             break
     if ref is None:
         ref = hip_history[0]
-    ref_idx, ref_y, ref_h = ref
+    ref_idx, ref_y, _ = ref
     dt = (cur_idx - ref_idx) / fps
     if dt <= 0 or cur_h <= 0:
         return 0.0
@@ -386,16 +381,12 @@ def draw_pose_skeleton(
     kpt_thr: float = 0.20,
     draw_coords: bool = False,
 ) -> np.ndarray:
-    """
-    COCO-17 skelet chiziqlari va bo'g'in nuqtalarini chizadi.
-    """
     if keypoints is None or scores is None or len(keypoints) == 0:
         return image
 
     kpts = keypoints[0] if keypoints.ndim == 3 else keypoints
     scs = scores[0] if scores.ndim == 2 else scores
 
-    # Skelet chiziqlari
     for idx, (p1_idx, p2_idx) in enumerate(SKELETON_CONNECTIONS):
         if p1_idx < len(kpts) and p2_idx < len(kpts):
             if scs[p1_idx] >= kpt_thr and scs[p2_idx] >= kpt_thr:
@@ -404,7 +395,6 @@ def draw_pose_skeleton(
                 color = LIMB_COLORS[idx] if idx < len(LIMB_COLORS) else (0, 255, 255)
                 cv2.line(image, pt1, pt2, color, 2, cv2.LINE_AA)
 
-    # Bo'g'in nuqtalar
     for idx, (x, y) in enumerate(kpts):
         if scs[idx] >= kpt_thr:
             px, py = int(round(x)), int(round(y))
@@ -427,17 +417,12 @@ def draw_pose_skeleton_global(
     kpt_thr: float = 0.20,
     draw_coords: bool = False,
 ) -> np.ndarray:
-    """
-    RTMPose keypoint-larini FULL-FRAME koordinatalarida chizadi.
-    Crop ichidagi nuqtalarga (offset_x, offset_y) ni qo'shib to'liq kadrga chiziladi.
-    """
     if keypoints is None or scores is None or len(keypoints) == 0:
         return frame
 
     kpts = keypoints[0] if keypoints.ndim == 3 else keypoints
     scs = scores[0] if scores.ndim == 2 else scores
 
-    # Skelet chiziqlari
     for idx, (p1_idx, p2_idx) in enumerate(SKELETON_CONNECTIONS):
         if p1_idx < len(kpts) and p2_idx < len(kpts):
             if scs[p1_idx] >= kpt_thr and scs[p2_idx] >= kpt_thr:
@@ -448,7 +433,6 @@ def draw_pose_skeleton_global(
                 color = LIMB_COLORS[idx] if idx < len(LIMB_COLORS) else (0, 255, 255)
                 cv2.line(frame, pt1, pt2, color, 2, cv2.LINE_AA)
 
-    # Bo'g'in nuqtalar
     for idx, (x, y) in enumerate(kpts):
         if scs[idx] >= kpt_thr:
             px = int(round(x)) + offset_x
@@ -464,9 +448,6 @@ def draw_pose_skeleton_global(
 
 
 class RTMPoseEstimator:
-    """
-    RTMPose Wrapper for Human Pose Estimation via rtmlib.
-    """
     def __init__(
         self,
         mode: str = "balanced",
@@ -482,7 +463,6 @@ class RTMPoseEstimator:
         self._init_model()
 
     def _init_model(self):
-        # Search for rtmlib in project root, parent folders, user home, and system site-packages
         project_root = Path(__file__).resolve().parent.parent.parent.parent
         user_home = Path.home()
         possible_rtmlib_paths = [
@@ -528,12 +508,6 @@ class RTMPoseEstimator:
 
 
     def __call__(self, img: np.ndarray, bboxes: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Runs RTMPose inference.
-        Returns:
-            keypoints: ndarray of shape (N, 17, 2)
-            scores: ndarray of shape (N, 17)
-        """
         if self._body is None:
             return np.empty((0, 17, 2)), np.empty((0, 17))
         try:
@@ -571,7 +545,7 @@ def process_video(
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
         raise RuntimeError(f"Video ochilmadi: {input_path}")
-    fps = int(cap.get(cv2.CAP_PROP_FPS)) or 25
+    fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
@@ -647,7 +621,6 @@ def process_fall_frame(
 
     if hasattr(model, "predict") and not isinstance(model, YOLO):
         try:
-            # rfdetr RGB formatni talab qiladi, OpenCV BGR beradi
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             detections = model.predict(frame_rgb, threshold=config.FALL_PERSON_CONF_THRESHOLD)
         except TypeError:
@@ -668,7 +641,6 @@ def process_fall_frame(
             sys_logger.error("process_fall_frame", f"YOLO predict error: {_e}", exc=_e)
             return frame, events, False
 
-    # class_id None bo'lsa xavfsiz qaytish
     if detections is None or not hasattr(detections, "class_id") or detections.class_id is None:
         sys_logger.warning("process_fall_frame", f"Frame {frame_idx}: Detections object missing class_id or None (total det count={len(detections) if detections is not None else 0})")
         return frame, events, False
@@ -676,7 +648,6 @@ def process_fall_frame(
     raw_det_count = len(detections)
     try:
         unique_class_ids = np.unique(detections.class_id) if hasattr(detections, "class_id") and detections.class_id is not None else []
-        # COCO 80-class uses class_id=0, COCO 91-class uses class_id=1 for person
         person_mask = (detections.class_id == 0) | (detections.class_id == 1)
         persons = detections[person_mask]
         person_det_count = len(persons)
@@ -695,12 +666,9 @@ def process_fall_frame(
     if frame_idx % 30 == 0 or raw_det_count > 0:
         sys_logger.info("process_fall_frame", f"Frame {frame_idx} [{width}x{height}]: Raw Detections={raw_det_count} (class_ids={list(unique_class_ids)}), Persons={person_det_count}, Tracked={track_count}")
 
-
-    # Har bir aniqlangan odam uchun YAGONA (bitta) ramka va yorliq chizish
     if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
-        for i, (bbox, track_id_t) in enumerate(zip(tracked_persons.xyxy, tracked_persons.tracker_id)):
+        for _, (bbox, track_id_t) in enumerate(zip(tracked_persons.xyxy, tracked_persons.tracker_id)):
             track_id = int(track_id_t)
-            conf_val = float(tracked_persons.confidence[i]) if tracked_persons.confidence is not None else 1.0
             x1, y1, x2, y2 = map(int, bbox)
             x1, y1 = max(x1, 0), max(y1, 0)
             x2, y2 = min(x2, width), min(y2, height)
@@ -723,7 +691,6 @@ def process_fall_frame(
                     kpt = kpts[0]
                     sc = scs[0]
 
-                    # RTMPose skelet chiziqlari va bo'g'inlari (raqamsiz)
                     draw_pose_skeleton_global(frame, kpts, scs, offset_x=x1, offset_y=y1, kpt_thr=0.20, draw_coords=False)
 
                     if is_pose_reliable(sc):
@@ -737,7 +704,6 @@ def process_fall_frame(
                         l_hip_sc = sc[KEYPOINT_LEFT_HIP]
                         r_hip_sc = sc[KEYPOINT_RIGHT_HIP]
 
-                        # Calculate shoulder center
                         if l_sh_sc >= 0.20 and r_sh_sc >= 0.20:
                             shoulder_center = ((l_sh[0] + r_sh[0]) / 2.0, (l_sh[1] + r_sh[1]) / 2.0)
                         elif l_sh_sc >= 0.20:
@@ -745,7 +711,6 @@ def process_fall_frame(
                         else:
                             shoulder_center = (float(r_sh[0]), float(r_sh[1]))
 
-                        # Calculate hip center
                         if l_hip_sc >= 0.20 and r_hip_sc >= 0.20:
                             hip_center = ((l_hip[0] + r_hip[0]) / 2.0, (l_hip[1] + r_hip[1]) / 2.0)
                         elif l_hip_sc >= 0.20:
@@ -765,7 +730,6 @@ def process_fall_frame(
                         aspect_drop = _aspect_dropped(state.aspect_history, fps)
                         fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
 
-                        # Tana vektori chizig'i (Torso line)
                         sh_pt = (int(x1 + shoulder_center[0]), int(y1 + shoulder_center[1]))
                         hip_pt = (int(x1 + hip_center[0]), int(y1 + hip_center[1]))
                         cv2.line(frame, sh_pt, hip_pt, (0, 0, 255), 3, cv2.LINE_AA)
@@ -802,26 +766,23 @@ def process_fall_frame(
                         else:
                             state.standing_frames = 0
 
-            # Bitta odam uchun yagona rang va yagona yorliq
             if state.fall_detected:
                 any_fall_this_frame = True
-                box_color = (0, 0, 255)  # Qizil - Yiqilgan
+                box_color = (0, 0, 255)
                 badge_text = f"FALL! ID{track_id} ({smoothed_angle:.0f}deg)"
             elif posture == "Falling":
-                box_color = (0, 140, 255)  # To'q sariq - Yiqilmoqda
+                box_color = (0, 140, 255)
                 badge_text = f"ID{track_id}: Falling ({smoothed_angle:.0f}deg)"
             elif posture == "Lying Down":
-                box_color = (0, 140, 255)  # To'q sariq - Yotgan
+                box_color = (0, 140, 255)
                 badge_text = f"ID{track_id}: Lying ({smoothed_angle:.0f}deg)"
             else:
-                box_color = (0, 200, 60)  # Yashil - Tik turgan
+                box_color = (0, 200, 60)
                 badge_text = f"ID{track_id}: Standing ({smoothed_angle:.0f}deg)"
 
-            # 1. Bitta yagona to'rtburchak ramka (Bounding box)
             cv2.rectangle(frame, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), (0, 0, 0), 2)
             cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2, cv2.LINE_AA)
 
-            # 2. Bitta yagona yorliq (Badge label)
             (tw, th), bl = cv2.getTextSize(badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)
             ty = max(th + 6, y1 - 4)
             cv2.rectangle(frame, (x1, ty - th - 5), (x1 + tw + 6, ty + bl + 1), box_color, -1)
@@ -859,8 +820,3 @@ if __name__ == "__main__":
         else:
             print(f"\rQayta ishlanmoqda: {cur}-frame", end="", flush=True)
     res = process_video(src, dst, progress_callback=_print_progress)
-    print()
-    print(f"Tayyor: {res.output_path}")
-    print(f"Yiqilish aniqlandimi: {res.fall_detected}")
-    for ev in res.fall_events:
-        print(f"  -> ID{ev.track_id}, frame {ev.frame_index}, {ev.timestamp_sec:.2f}s")

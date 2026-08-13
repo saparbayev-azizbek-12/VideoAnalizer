@@ -1,28 +1,27 @@
 from __future__ import annotations
-import csv
-import json
 import os
-import queue
-import sys
-import threading
-import time
-import uuid
-import urllib.request
-import urllib.parse
-import urllib.error
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-from typing import Optional
 import cv2
+import csv
+import sys
+import time
+import json
+import uuid
+import queue
+import threading
 import numpy as np
+import tkinter as tk
+import urllib.request
+from typing import Optional
 from PIL import Image, ImageTk
+from tkinter import filedialog, messagebox, ttk
+
+from multi_object_detector import config
+from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter
+
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PKG_DIR not in sys.path:
     sys.path.insert(0, os.path.dirname(_PKG_DIR))
-
-from multi_object_detector import config
-from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter
 
 BG = "#1a1a2e"
 BG2 = "#16213e"

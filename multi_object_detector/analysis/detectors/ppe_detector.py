@@ -4,7 +4,9 @@ import numpy as np
 from typing import Optional
 from ultralytics import YOLO
 from dataclasses import dataclass
+
 from multi_object_detector import config
+
 
 CLASS_PERSON = "Person"
 CLASS_SAFETY_HELMET = "Safety Helmet"

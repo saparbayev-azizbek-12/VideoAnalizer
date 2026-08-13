@@ -2,25 +2,27 @@ from __future__ import annotations
 import os
 import sys
 import csv
+import cv2
 import json
 import time
 import uuid
 import shutil
 import threading
+import numpy as np
 from typing import Optional
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse, StreamingResponse
-import cv2
-import numpy as np
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
+
+from multi_object_detector import config
+from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter
+from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
+
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PKG_DIR not in sys.path:
     sys.path.insert(0, os.path.dirname(_PKG_DIR))
 
-from multi_object_detector import config
-from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter
-from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
 
 JOBS_DIR = os.path.join(config.BASE_DIR, "video_jobs")
 os.makedirs(JOBS_DIR, exist_ok=True)

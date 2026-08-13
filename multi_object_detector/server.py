@@ -10,10 +10,12 @@ from pydantic import BaseModel
 from fastapi.responses import Response
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+
 from multi_object_detector import config
 from multi_object_detector import camera_manager
 from multi_object_detector.analysis import models_manager
 from multi_object_detector.system_logger import sys_logger
+
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
 app = FastAPI(title="AI Video Monitoring Server")

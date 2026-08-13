@@ -1,12 +1,10 @@
 from __future__ import annotations
 import os
-import sys
-import time
-import logging
 import traceback
 import threading
 from datetime import datetime
 from multi_object_detector import config
+
 
 LOG_FILE_PATH = os.path.join(config.BASE_DIR, "system_debug.log")
 _log_lock = threading.Lock()

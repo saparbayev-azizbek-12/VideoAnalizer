@@ -7,13 +7,14 @@ import time
 import argparse
 import numpy as np
 import supervision as sv
-from typing import Optional, Any
 from ultralytics import YOLO
+from typing import Optional, Any
+
 from multi_object_detector import config
 from multi_object_detector.system_logger import sys_logger
 
-PERSON_CLASS_ID = 0
 
+PERSON_CLASS_ID = 0
 _PERSON_MODEL: Optional[Any] = None
 
 def get_model() -> Any:

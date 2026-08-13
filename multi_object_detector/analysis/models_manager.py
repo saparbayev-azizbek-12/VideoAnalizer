@@ -2,9 +2,11 @@ from __future__ import annotations
 import threading
 import numpy as np
 from ultralytics import YOLO
+
 from multi_object_detector import config
 from multi_object_detector.system_logger import sys_logger
 from multi_object_detector.analysis.detectors import fire_detector, danger_zone_detector, ppe_detector
+
 
 _state_lock = threading.Lock()
 _enabled: dict[str, bool] = dict(config.MODEL_DEFAULT_ENABLED)
