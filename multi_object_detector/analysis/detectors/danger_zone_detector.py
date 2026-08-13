@@ -7,12 +7,24 @@ import time
 import argparse
 import numpy as np
 import supervision as sv
-from typing import Optional
+from typing import Optional, Any
 from ultralytics import YOLO
 from multi_object_detector import config
 
+PERSON_CLASS_ID = 0
 
-PERSON_CLASS_ID = config.PERSON_CLASS_ID
+_PERSON_MODEL: Optional[Any] = None
+
+def get_model() -> Any:
+    global _PERSON_MODEL
+    if _PERSON_MODEL is None:
+        try:
+            from rfdetr import RFDETRLarge
+            _PERSON_MODEL = RFDETRLarge()
+        except Exception as e:
+            print(f"[DangerZone] RFDETRLarge yuklashda ogohlantirish: {e}. YOLO ga o'tilmoqda.")
+            _PERSON_MODEL = YOLO(config.PERSON_MODEL_PATH)
+    return _PERSON_MODEL
 
 def load_zone(zone_path: str) -> np.ndarray:
     with open(zone_path, "r", encoding="utf-8") as f:
@@ -23,8 +35,8 @@ def load_zone(zone_path: str) -> np.ndarray:
     return polygon
 
 class DangerZoneState:
-    def __init__(self, polygon: np.ndarray, model: Optional[YOLO] = None):
-        self.model = model or YOLO(config.PERSON_MODEL_PATH)
+    def __init__(self, polygon: np.ndarray, model: Optional[Any] = None):
+        self.model = model or get_model()
         self.polygon = polygon
         self.zone = sv.PolygonZone(polygon=polygon)
         self.zone_annotator = sv.PolygonZoneAnnotator(zone=self.zone, color=sv.Color.RED, thickness=2)
@@ -37,8 +49,15 @@ class DangerZoneState:
         self.zone_annotator = sv.PolygonZoneAnnotator(zone=self.zone, color=sv.Color.RED, thickness=2)
 
     def analyze(self, frame: np.ndarray, conf: float = 0.35, draw_boxes: bool = True) -> tuple[np.ndarray, int, bool]:
-        result = self.model(frame, conf=conf, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(result)
+        if hasattr(self.model, "predict") and not isinstance(self.model, YOLO):
+            try:
+                detections = self.model.predict(frame, threshold=conf)
+            except Exception:
+                detections = self.model.predict(frame)
+        else:
+            result = self.model(frame, conf=conf, verbose=False)[0]
+            detections = sv.Detections.from_ultralytics(result)
+
         people = detections[detections.class_id == PERSON_CLASS_ID]
         in_zone_mask = self.zone.trigger(detections=people)
         people_in_zone = int(in_zone_mask.sum())
@@ -46,7 +65,10 @@ class DangerZoneState:
 
         annotated = self.zone_annotator.annotate(scene=frame)
         if draw_boxes and len(people) > 0:
-            labels = [f"person {c:.2f}" for c in people.confidence]
+            if people.confidence is not None:
+                labels = [f"person {c:.2f}" for c in people.confidence]
+            else:
+                labels = ["person" for _ in range(len(people))]
             annotated = self.box_annotator.annotate(scene=annotated, detections=people)
             annotated = self.label_annotator.annotate(scene=annotated, detections=people, labels=labels)
 
@@ -62,14 +84,18 @@ def main():
     parser.add_argument("--video", required=True, help="Kirish video fayli")
     parser.add_argument("--zone", required=True, help="select_zone.py orqali saqlangan zone.json")
     parser.add_argument("--output", default="output.mp4", help="Chiqish (annotatsiyalangan) video")
-    parser.add_argument("--model", default=config.PERSON_MODEL_PATH, help="Ultralytics YOLO model fayli")
+    parser.add_argument("--model", default=None, help="Model fayli")
     parser.add_argument("--conf", type=float, default=0.35, help="Aniqlash ishonch chegarasi")
     parser.add_argument("--show", action="store_true", help="Jonli oynada ko'rsatish")
     parser.add_argument("--log", default="danger_log.csv", help="Buzilishlar logi (CSV)")
     args = parser.parse_args()
 
     polygon = load_zone(args.zone)
-    model = YOLO(args.model)
+    if args.model:
+        model = YOLO(args.model)
+    else:
+        model = get_model()
+
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
         sys.exit(f"Xatolik: video ochilmadi -> {args.video}")
@@ -80,10 +106,7 @@ def main():
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(args.output, fourcc, fps, (width, height))
 
-    zone = sv.PolygonZone(polygon=polygon)
-    zone_annotator = sv.PolygonZoneAnnotator(zone=zone, color=sv.Color.RED, thickness=2)
-    box_annotator = sv.BoxAnnotator(color=sv.Color.RED)
-    label_annotator = sv.LabelAnnotator()
+    state = DangerZoneState(polygon=polygon, model=model)
 
     log_rows = []
     frame_idx = 0
@@ -95,22 +118,10 @@ def main():
         ok, frame = cap.read()
         if not ok:
             break
-        result = model(frame, conf=args.conf, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(result)
-        people = detections[detections.class_id == PERSON_CLASS_ID]
-        in_zone_mask = zone.trigger(detections=people)
-        people_in_zone = int(in_zone_mask.sum())
-        breach = people_in_zone > 0
-        annotated = zone_annotator.annotate(scene=frame)
-        if len(people) > 0:
-            labels = [f"person {conf:.2f}" for conf in people.confidence]
-            annotated = box_annotator.annotate(scene=annotated, detections=people)
-            annotated = label_annotator.annotate(scene=annotated, detections=people, labels=labels)
+        annotated, people_in_zone, breach = state.analyze(frame, conf=args.conf, draw_boxes=True)
 
         if breach:
             breach_frames += 1
-            cv2.rectangle(annotated, (0, 0), (width, 50), (0, 0, 255), -1)
-            cv2.putText(annotated, f"DIQQAT! XAVFLI HUDUDDA {people_in_zone} ODAM BOR", (15, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             log_rows.append({"frame": frame_idx, "time_sec": round(frame_idx / fps, 2), "people_in_zone": people_in_zone})
 
         writer.write(annotated)

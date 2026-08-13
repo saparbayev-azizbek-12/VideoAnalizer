@@ -255,8 +255,7 @@ class CameraWorker:
 
         if models_manager.is_enabled("fall"):
             if self._fall_model is None:
-                from ultralytics import YOLO as _YOLO
-                self._fall_model = _YOLO(config.PERSON_MODEL_PATH)
+                self._fall_model = fall_detector.get_model()
                 self._fall_pose = fall_detector.create_pose_instance()
 
             out, fall_events, _any_fall = fall_detector.process_fall_frame(

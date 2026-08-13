@@ -25,6 +25,7 @@ dependencies = [
     "ultralytics==8.3.49",
     "uvicorn[standard]==0.32.0",
     "onnxruntime>=1.17.0",
+    "rfdetr",
 ]
 
 [build-system]

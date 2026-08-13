@@ -112,15 +112,27 @@ def _analyze_frame_multi(
     if models_enabled.get("fall") and _fall_model is not None and _fall_pose is not None:
         any_fall_detected = False
         try:
-            results_det = _fall_model.track(
-                annotated, persist=True, classes=[0],
-                tracker="bytetrack.yaml", verbose=False
-            )
-            for result in results_det:
-                boxes = result.boxes
-                if boxes.id is None:
-                    continue
-                for bbox, track_id_t in zip(boxes.xyxy, boxes.id):
+            if not hasattr(_fall_model, "_tracker"):
+                import supervision as sv
+                _fall_model._tracker = sv.ByteTrack()
+            _fall_tracker = _fall_model._tracker
+
+            if hasattr(_fall_model, "predict") and not isinstance(_fall_model, YOLO):
+                try:
+                    detections = _fall_model.predict(annotated, threshold=config.FALL_PERSON_CONF_THRESHOLD)
+                except Exception:
+                    detections = _fall_model.predict(annotated)
+            else:
+                res = _fall_model(annotated, classes=[0], verbose=False)[0]
+                import supervision as sv
+                detections = sv.Detections.from_ultralytics(res)
+
+            person_mask = (detections.class_id == 0)
+            persons = detections[person_mask]
+            tracked_persons = _fall_tracker.update_with_detections(persons)
+
+            if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
+                for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
                     track_id = int(track_id_t)
                     x1, y1, x2, y2 = map(int, bbox)
                     x1, y1 = max(x1, 0), max(y1, 0)

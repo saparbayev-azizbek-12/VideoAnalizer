@@ -5,10 +5,11 @@ import sys
 import math
 import subprocess
 import numpy as np
+import supervision as sv
 from pathlib import Path
 from ultralytics import YOLO
 from collections import deque
-from typing import Callable, Optional, Tuple, List, Union
+from typing import Callable, Optional, Tuple, List, Union, Any
 from dataclasses import dataclass, field
 from multi_object_detector import config
 
@@ -131,11 +132,18 @@ def is_pose_reliable(scores: np.ndarray, threshold: float = 0.25) -> bool:
     hip_vis = max(float(scores[KEYPOINT_LEFT_HIP]), float(scores[KEYPOINT_RIGHT_HIP]))
     return sh_vis >= threshold and hip_vis >= threshold
 
-def get_model() -> YOLO:
-    global _YOLO_MODEL
-    if _YOLO_MODEL is None:
-        _YOLO_MODEL = YOLO(config.PERSON_MODEL_PATH)
-    return _YOLO_MODEL
+_PERSON_MODEL: Optional[Any] = None
+
+def get_model() -> Any:
+    global _PERSON_MODEL
+    if _PERSON_MODEL is None:
+        try:
+            from rfdetr import RFDETRLarge
+            _PERSON_MODEL = RFDETRLarge()
+        except Exception as e:
+            print(f"[FallDetector] RFDETRLarge yuklashda ogohlantirish: {e}. YOLO ga o'tilmoqda.")
+            _PERSON_MODEL = YOLO(config.PERSON_MODEL_PATH)
+    return _PERSON_MODEL
 
 def calculate_angle(hip_center: tuple[float, float], shoulder_center: tuple[float, float]) -> float:
     dy = hip_center[1] - shoulder_center[1]
@@ -420,6 +428,8 @@ def process_video(
     frame_idx = 0
     track_states: dict[int, TrackState] = {}
 
+    model = get_model()
+    tracker = sv.ByteTrack()
     pose = create_pose_instance()
 
     while cap.isOpened():
@@ -429,15 +439,22 @@ def process_video(
         frame_idx += 1
         any_fall_this_frame = False
         frame = undistort_frame(frame)
-        try:
-            results = get_model().track(frame, persist=True, classes=[0], tracker="bytetrack.yaml", verbose=False)
-        except Exception:
-            results = get_model()(frame, classes=[0], verbose=False)
-        for result in results:
-            boxes = result.boxes
-            if boxes.id is None:
-                continue
-            for bbox, track_id_t in zip(boxes.xyxy, boxes.id):
+
+        if hasattr(model, "predict") and not isinstance(model, YOLO):
+            try:
+                detections = model.predict(frame, threshold=config.FALL_PERSON_CONF_THRESHOLD)
+            except Exception:
+                detections = model.predict(frame)
+        else:
+            res = model(frame, classes=[0], verbose=False)[0]
+            detections = sv.Detections.from_ultralytics(res)
+
+        person_mask = (detections.class_id == 0)
+        persons = detections[person_mask]
+        tracked_persons = tracker.update_with_detections(persons)
+
+        if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
+            for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
                 track_id = int(track_id_t)
                 x1, y1, x2, y2 = map(int, bbox)
                 x1, y1 = max(x1, 0), max(y1, 0)
@@ -567,9 +584,10 @@ def process_fall_frame(
     frame: np.ndarray,
     frame_idx: int,
     fps: int,
-    model: YOLO,
+    model: Any,
     pose: RTMPoseEstimator,
     track_states: dict[int, TrackState],
+    tracker: Optional[Any] = None,
 ) -> tuple[np.ndarray, list[dict], bool]:
     frame = undistort_frame(frame)
     width, height = frame.shape[1], frame.shape[0]
@@ -577,16 +595,26 @@ def process_fall_frame(
     any_fall_this_frame = False
     posture = None
 
-    try:
-        results = model.track(frame, persist=True, classes=[0], tracker="bytetrack.yaml", verbose=False)
-    except Exception:
-        results = model(frame, classes=[0], verbose=False)
+    if tracker is None:
+        if not hasattr(model, "_tracker"):
+            model._tracker = sv.ByteTrack()
+        tracker = model._tracker
 
-    for result in results:
-        boxes = result.boxes
-        if boxes.id is None:
-            continue
-        for bbox, track_id_t in zip(boxes.xyxy, boxes.id):
+    if hasattr(model, "predict") and not isinstance(model, YOLO):
+        try:
+            detections = model.predict(frame, threshold=config.FALL_PERSON_CONF_THRESHOLD)
+        except Exception:
+            detections = model.predict(frame)
+    else:
+        res = model(frame, classes=[0], verbose=False)[0]
+        detections = sv.Detections.from_ultralytics(res)
+
+    person_mask = (detections.class_id == 0)
+    persons = detections[person_mask]
+    tracked_persons = tracker.update_with_detections(persons)
+
+    if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
+        for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
             track_id = int(track_id_t)
             x1, y1, x2, y2 = map(int, bbox)
             x1, y1 = max(x1, 0), max(y1, 0)

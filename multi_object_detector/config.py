@@ -17,6 +17,7 @@ if os.path.exists(DETECTORS_DIR) and DETECTORS_DIR not in sys.path:
 VIT_FIRE_MODEL_DIR = os.path.join(BASE_DIR, "analysis", "models", "vit-fire-detection")
 VIT_FIRE_HF_REPO = "EdBianchi/vit-fire-detection"
 PERSON_MODEL_PATH = os.path.join(BASE_DIR, "analysis", "models", "yolov8l.pt")
+PERSON_DETECTOR_MODEL = os.getenv("PERSON_DETECTOR_MODEL", "rfdetr_large")
 PERSON_CLASS_ID = 0
 PPE_MODEL_PATH = os.path.join(BASE_DIR, "analysis", "models", "sfchd_yolov8s.pt")
 

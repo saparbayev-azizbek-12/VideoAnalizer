@@ -45,7 +45,7 @@ def get_zone_person_model():
     global _zone_person_model
     with _zone_model_lock:
         if _zone_person_model is None:
-            _zone_person_model = YOLO(config.PERSON_MODEL_PATH)
+            _zone_person_model = danger_zone_detector.get_model()
     return _zone_person_model
 
 def get_ppe_model() -> YOLO:
