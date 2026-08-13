@@ -149,7 +149,7 @@ def _analyze_frame_server(
     fps: float,
     models_enabled: dict[str, bool],
     fall_pose=None,
-    fall_track_states=None,
+    fall_track_states=None):
     from multi_object_detector.analysis.frame_filter import is_frame_valid
     if not is_frame_valid(frame):
         return frame, []
