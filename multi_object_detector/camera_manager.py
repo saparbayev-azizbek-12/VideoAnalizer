@@ -6,6 +6,7 @@ import json
 import uuid
 import threading
 import numpy as np
+import supervision as sv
 from typing import Optional
 from collections import deque
 from dataclasses import dataclass, field
@@ -14,7 +15,7 @@ from multi_object_detector import config
 from multi_object_detector.system_logger import sys_logger
 from multi_object_detector.stream_logger import stream_logger
 from multi_object_detector.analysis import models_manager, frame_filter
-from multi_object_detector.analysis.detectors import fall_detector, danger_zone_detector
+from multi_object_detector.analysis.detectors import fall_detector, danger_zone_detector, fire_detector
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
 
@@ -37,20 +38,28 @@ class CameraWorker:
         self._annotated_frame: Optional[np.ndarray] = None
         self._connected = False
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._capture_thread: Optional[threading.Thread] = None
+        self._analysis_thread: Optional[threading.Thread] = None
+        self._new_frame_event = threading.Event()
         self._last_error: Optional[str] = None
         self._stream_filter = frame_filter.StreamCorruptionFilter(camera_id=cam_id)
         self.events: deque = deque(maxlen=300)
         self.frame_idx = 0
         self.fps_estimate = 10.0
         self._last_frame_time: Optional[float] = None
-        self._fall_model = None
-        self._fall_pose = None
+        self._fall_tracker = sv.ByteTrack()
+        self._fall_pose: Optional[fall_detector.RTMPoseEstimator] = None
         self._fall_track_states: dict[int, fall_detector.TrackState] = {}
+        self._fire_validator = fire_detector.TemporalValidator(window=6, min_hits=3)
         self._zone_polygon: Optional[np.ndarray] = None
         self._zone_state: Optional[danger_zone_detector.DangerZoneState] = None
         self._zone_lock = threading.Lock()
         self._last_dataset_save: dict[str, float] = {}
+        src_str = str(self.source).strip()
+        self._is_file_source = (
+            os.path.exists(src_str)
+            or (not src_str.isdigit() and not src_str.lower().startswith(("rtsp://", "rtsps://", "http://", "https://")))
+        )
 
     @property
     def connected(self) -> bool:
@@ -73,7 +82,11 @@ class CameraWorker:
 
     def get_annotated_frame(self) -> Optional[np.ndarray]:
         with self._lock:
-            return None if self._annotated_frame is None else self._annotated_frame.copy()
+            if self._annotated_frame is not None:
+                return self._annotated_frame.copy()
+            if self._raw_frame is not None:
+                return self._raw_frame.copy()
+            return None
 
     def get_recent_events(self, limit: int = 50) -> list[dict]:
         with self._lock:
@@ -103,14 +116,20 @@ class CameraWorker:
             if self._running:
                 return
             self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True, name=f"cam-{self.id}")
-        self._thread.start()
+            self._new_frame_event.clear()
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True, name=f"cap-{self.id}")
+        self._analysis_thread = threading.Thread(target=self._analysis_loop, daemon=True, name=f"ana-{self.id}")
+        self._capture_thread.start()
+        self._analysis_thread.start()
 
     def stop(self) -> None:
         with self._lock:
             self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=3)
+            self._new_frame_event.set()
+        if self._capture_thread is not None:
+            self._capture_thread.join(timeout=2)
+        if self._analysis_thread is not None:
+            self._analysis_thread.join(timeout=2)
         if self._fall_pose is not None:
             try:
                 self._fall_pose.close()
@@ -123,15 +142,14 @@ class CameraWorker:
             return cv2.VideoCapture(int(src))
         except (TypeError, ValueError):
             pass
+        if self._is_file_source:
+            return cv2.VideoCapture(src)
         return cv2.VideoCapture(src, cv2.CAP_FFMPEG)
 
-    def _run(self) -> None:
+    def _capture_loop(self) -> None:
         cap = None
         consecutive_read_fails = 0
-        while True:
-            with self._lock:
-                if not self._running:
-                    break
+        while self._running:
             if cap is None or not cap.isOpened():
                 consecutive_read_fails = 0
                 cap = self._open_capture()
@@ -147,6 +165,11 @@ class CameraWorker:
 
             ok, frame = cap.read()
             if not ok or frame is None:
+                if self._is_file_source and cap is not None:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    time.sleep(0.02)
+                    continue
+
                 consecutive_read_fails += 1
                 if consecutive_read_fails < 5:
                     time.sleep(0.01)
@@ -163,14 +186,39 @@ class CameraWorker:
                 continue
 
             consecutive_read_fails = 0
-
             self._update_fps_estimate()
+
             with self._lock:
                 self._connected = True
                 self._last_error = None
                 self._raw_frame = frame
-            self.frame_idx += 1
+                self._new_frame_event.set()
 
+            if self._is_file_source:
+                time.sleep(1.0 / max(1.0, self.fps_estimate))
+
+        if cap is not None:
+            cap.release()
+        with self._lock:
+            self._connected = False
+
+    def _analysis_loop(self) -> None:
+        while self._running:
+            signaled = self._new_frame_event.wait(timeout=0.1)
+            self._new_frame_event.clear()
+
+            if not self._running:
+                break
+
+            with self._lock:
+                frame = self._raw_frame.copy() if self._raw_frame is not None else None
+                connected = self._connected
+
+            if frame is None or not connected:
+                time.sleep(0.05)
+                continue
+
+            self.frame_idx += 1
             is_valid, corrupt_reason = self._stream_filter.check_frame(frame)
             if not is_valid:
                 stream_logger.log_corruption(self.id, self.name, self.source, corrupt_reason or "Kadr buzilgan")
@@ -180,7 +228,7 @@ class CameraWorker:
                 continue
 
             try:
-                annotated = self._analyze(frame.copy())
+                annotated = self._analyze(frame)
             except Exception as e:
                 import traceback
                 print(f"\n[CameraWorker:{self.name}] _analyze xatoligi: {e}")
@@ -192,11 +240,6 @@ class CameraWorker:
 
             with self._lock:
                 self._annotated_frame = annotated
-
-        if cap is not None:
-            cap.release()
-        with self._lock:
-            self._connected = False
 
     def _update_fps_estimate(self) -> None:
         now = time.time()
@@ -253,7 +296,9 @@ class CameraWorker:
 
         if models_manager.is_enabled("fire"):
             try:
-                out, fire_events, _has_fire, _has_smoke = models_manager.analyze_fire(out)
+                out, fire_events, _has_fire, _has_smoke = models_manager.analyze_fire(
+                    out, validator=self._fire_validator
+                )
                 for ev in fire_events:
                     snap = self._save_dataset_snapshot("fire", out, ev)
                     extra = dict(box=ev["box"], confidence=ev["confidence"], type=ev["type"])
@@ -265,22 +310,16 @@ class CameraWorker:
 
         if models_manager.is_enabled("fall"):
             try:
-                if self._fall_model is None:
-                    sys_logger.info("CameraWorker", f"[{self.name}] Fall model yuklanmoqda...")
-                    self._fall_model = fall_detector.get_model()
-                    sys_logger.info("CameraWorker", f"[{self.name}] Fall model yuklandi: {type(self._fall_model).__name__}")
                 if self._fall_pose is None:
-                    sys_logger.info("CameraWorker", f"[{self.name}] RTMPose yuklanmoqda...")
                     self._fall_pose = fall_detector.create_pose_instance()
-                    sys_logger.info("CameraWorker", f"[{self.name}] RTMPose yuklandi")
 
-                out, fall_events, _any_fall = fall_detector.process_fall_frame(
-                    out,
-                    self.frame_idx,
-                    max(1, int(round(self.fps_estimate))),
-                    self._fall_model,
-                    self._fall_pose,
-                    self._fall_track_states,
+                out, fall_events, _any_fall = models_manager.analyze_fall(
+                    frame=out,
+                    frame_idx=self.frame_idx,
+                    fps=max(1, int(round(self.fps_estimate))),
+                    pose=self._fall_pose,
+                    track_states=self._fall_track_states,
+                    tracker=self._fall_tracker,
                 )
                 for ev in fall_events:
                     snap = self._save_dataset_snapshot("fall", out, ev)

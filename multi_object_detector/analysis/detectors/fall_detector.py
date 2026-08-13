@@ -15,6 +15,7 @@ from typing import Callable, Optional, Any
 from multi_object_detector import config
 from multi_object_detector.system_logger import sys_logger
 
+
 KEYPOINT_NOSE = 0
 KEYPOINT_LEFT_EYE = 1
 KEYPOINT_RIGHT_EYE = 2
@@ -82,7 +83,6 @@ def get_undistort_maps(frame_w: int, frame_h: int, calib_path: Optional[str] = N
     _UNDISTORT_CACHE[key] = (map1, map2)
     return _UNDISTORT_CACHE[key]
 
-
 def undistort_frame(frame: np.ndarray, calib_path: Optional[str] = None) -> np.ndarray:
     h, w = frame.shape[:2]
     maps = get_undistort_maps(w, h, calib_path)
@@ -90,7 +90,6 @@ def undistort_frame(frame: np.ndarray, calib_path: Optional[str] = None) -> np.n
         return frame
     map1, map2 = maps
     return cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
-
 
 STANDING_ANGLE_DEG = 22.0
 LYING_ANGLE_DEG = 62.0
@@ -115,14 +114,12 @@ MIN_VISIBLE_LANDMARKS_RATIO = 1.0 - MAX_OCCLUSION_RATIO
 FALL_CONFIRM_FRAMES = 4
 STANDING_MIN_FRAMES = 10
 
-
 def is_valid_person_crop(bbox_w: int, bbox_h: int) -> bool:
     if max(bbox_w, bbox_h) < 35:
         return False
     if (bbox_w * bbox_h) < 600:
         return False
     return True
-
 
 def is_pose_reliable(scores: np.ndarray, threshold: float = 0.25) -> bool:
     if scores is None or len(scores) < 13:
@@ -133,9 +130,7 @@ def is_pose_reliable(scores: np.ndarray, threshold: float = 0.25) -> bool:
     hip_vis = max(float(scores[KEYPOINT_LEFT_HIP]), float(scores[KEYPOINT_RIGHT_HIP]))
     return sh_vis >= threshold and hip_vis >= threshold
 
-
 _PERSON_MODEL: Optional[Any] = None
-
 
 def get_model() -> Any:
     global _PERSON_MODEL
@@ -161,7 +156,6 @@ def calculate_angle(hip_center: tuple[float, float], shoulder_center: tuple[floa
     angle = math.atan2(dy, dx)
     return abs(90 - np.degrees(angle))
 
-
 def classify_posture(torso_angle: float,
                      standing_threshold: float = STANDING_ANGLE_DEG,
                      lying_threshold: float = LYING_ANGLE_DEG) -> str:
@@ -171,7 +165,6 @@ def classify_posture(torso_angle: float,
         return "Lying Down"
     else:
         return "Falling"
-
 
 def check_5frame_transition(posture_history: deque) -> bool:
     if len(posture_history) < 5:
@@ -186,13 +179,11 @@ def check_5frame_transition(posture_history: deque) -> bool:
     downward_sum = sum(r[2:])
     return (start_min < end_max) and (downward_sum >= 3)
 
-
 @dataclass
 class FallEvent:
     frame_index: int
     timestamp_sec: float
     track_id: int
-
 
 @dataclass
 class ProcessingResult:
@@ -203,7 +194,6 @@ class ProcessingResult:
     total_frames: int
     fall_detected: bool
     fall_events: list[FallEvent] = field(default_factory=list)
-
 
 @dataclass
 class TrackState:
@@ -219,9 +209,7 @@ class TrackState:
     confirm_count: int = 0
     standing_frames: int = 0
 
-
 ProgressCallback = Callable[[int, int], None]
-
 
 def _vertical_velocity(hip_history: deque, fps: int) -> float:
     if len(hip_history) < 2:
@@ -242,7 +230,6 @@ def _vertical_velocity(hip_history: deque, fps: int) -> float:
     dy_norm = abs(cur_y - ref_y) / cur_h
     return dy_norm / dt
 
-
 def _aspect_dropped(aspect_history: deque, fps: int) -> bool:
     if len(aspect_history) < 2:
         return False
@@ -255,7 +242,6 @@ def _aspect_dropped(aspect_history: deque, fps: int) -> bool:
     if recent_max <= 0:
         return False
     return cur_ratio < recent_max * ASPECT_DROP_RATIO
-
 
 KEYPOINT_COLORS = [
     (0, 255, 255),
@@ -298,7 +284,6 @@ LIMB_COLORS = [
     (255, 255, 0),
     (255, 255, 0),
 ]
-
 
 def draw_person_detection(
     image: np.ndarray,
@@ -517,7 +502,6 @@ class RTMPoseEstimator:
             except Exception:
                 return np.empty((0, 17, 2)), np.empty((0, 17))
 
-
 def create_pose_instance(
     mode: Optional[str] = None,
     backend: Optional[str] = None,
@@ -529,7 +513,6 @@ def create_pose_instance(
     d = device or getattr(config, "RTMPOSE_DEVICE", "cpu")
     p = model_path or getattr(config, "RTMPOSE_MODEL_PATH", None)
     return RTMPoseEstimator(mode=m, backend=b, device=d, onnx_model=p)
-
 
 def process_video(
     input_path: str,
@@ -589,7 +572,6 @@ def process_video(
     out.release()
     return ProcessingResult(output_path=output_path, fps=fps, width=width, height=height, total_frames=frame_idx, fall_detected=len(fall_events) > 0, fall_events=fall_events)
 
-
 def process_fall_frame(
     frame: np.ndarray,
     frame_idx: int,
@@ -598,17 +580,17 @@ def process_fall_frame(
     pose: RTMPoseEstimator,
     track_states: dict[int, TrackState],
     tracker: Optional[Any] = None,
+    calib_path: Optional[str] = None,
 ) -> tuple[np.ndarray, list[dict], bool]:
-    frame = undistort_frame(frame)
+    if calib_path is not None:
+        frame = undistort_frame(frame, calib_path=calib_path)
     width, height = frame.shape[1], frame.shape[0]
     events: list[dict] = []
     any_fall_this_frame = False
     posture = None
 
     if tracker is None:
-        if not hasattr(model, "_tracker"):
-            model._tracker = sv.ByteTrack()
-        tracker = model._tracker
+        tracker = sv.ByteTrack()
 
     if hasattr(model, "predict") and not isinstance(model, YOLO):
         try:
@@ -789,7 +771,6 @@ def process_fall_frame(
 
     return frame, events, any_fall_this_frame
 
-
 def reencode_for_web(input_path: str, output_path: str) -> None:
     try:
         import imageio_ffmpeg
@@ -799,18 +780,15 @@ def reencode_for_web(input_path: str, output_path: str) -> None:
     cmd = [ffmpeg_exe, "-y", "-i", input_path, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output_path]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         print("Foydalanish: python fall_detector.py <input_video> <output_video>")
         sys.exit(1)
     src, dst = sys.argv[1], sys.argv[2]
-
     def _print_progress(cur: int, total: int) -> None:
         if total:
             pct = cur / total * 100
             print(f"\rQayta ishlanmoqda: {cur}/{total} ({pct:.1f}%)", end="", flush=True)
         else:
             print(f"\rQayta ishlanmoqda: {cur}-frame", end="", flush=True)
-
     res = process_video(src, dst, progress_callback=_print_progress)
