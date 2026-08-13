@@ -135,7 +135,7 @@ def _analyze_frame_multi(
                 cv2.putText(annotated, "ALARM: FALL DETECTED (YIQILISH)", (20, 28),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
         except Exception as _e:
-            print(f"[VideoUI] Fall frame error: {_e}")
+            pass
 
     return annotated, events
 

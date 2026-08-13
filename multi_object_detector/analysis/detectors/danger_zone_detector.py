@@ -68,7 +68,6 @@ class DangerZoneState:
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     detections = self.model.predict(frame_rgb)
                 except Exception as _e:
-                    print(f"[DangerZone] predict xatoligi: {_e}")
                     return frame, 0, False
         else:
             result = self.model(frame, conf=conf, verbose=False)[0]
@@ -151,7 +150,6 @@ def main():
     breach_frames = 0
     t0 = time.time()
 
-    print("Qayta ishlanmoqda...")
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -166,7 +164,6 @@ def main():
         if args.show:
             cv2.imshow("Xavfli hudud monitoring", annotated)
             if cv2.waitKey(1) & 0xFF == ord('q'):
-                print("Foydalanuvchi tomonidan to'xtatildi.")
                 break
         frame_idx += 1
 
@@ -182,11 +179,6 @@ def main():
         writer_csv.writerows(log_rows)
 
     elapsed = time.time() - t0
-    print(f"\nTayyor! {frame_idx} kadr {elapsed:.1f} soniyada qayta ishlandi.")
-    print(f"Xavfli hududda odam bo'lgan kadrlar soni: {breach_frames}")
-    print(f"Natija video: {args.output}")
-    print(f"Log fayli: {args.log}")
-
 
 if __name__ == "__main__":
     main()

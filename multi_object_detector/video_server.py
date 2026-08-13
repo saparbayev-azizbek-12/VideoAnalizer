@@ -130,16 +130,10 @@ def _ensure_models():
         if not _models_loaded:
             try:
                 _fire_model = fire_detector.get_model()
-            except Exception as e:
-                print(f"[VideoServer] Fire model yuklashda ogohlantirish: {e}")
-            try:
                 _ppe_model = ppe_detector.get_model()
-            except Exception as e:
-                print(f"[VideoServer] PPE model yuklashda ogohlantirish: {e}")
-            try:
                 _fall_model = fall_detector.get_model()
             except Exception as e:
-                print(f"[VideoServer] Fall model yuklashda ogohlantirish: {e}")
+                pass
             _models_loaded = True
 
 
@@ -221,7 +215,7 @@ def _analyze_frame_server(
                 cv2.putText(annotated, "ALARM: FALL DETECTED (YIQILISH)", (20, 28),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
         except Exception as _e:
-            print(f"[VideoServer] Fall frame error: {_e}")
+            pass
 
     return annotated, events
 

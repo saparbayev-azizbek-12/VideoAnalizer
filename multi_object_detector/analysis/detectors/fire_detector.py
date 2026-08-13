@@ -266,19 +266,6 @@ def reencode_for_web(input_path: str, output_path: str) -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Foydalanish: python fire_detector.py <input_video> <output_video>")
         sys.exit(1)
     src, dst = sys.argv[1], sys.argv[2]
-
-    def _print_progress(cur: int, total: int) -> None:
-        if total:
-            pct = cur / total * 100
-            print(f"\rQayta ishlanmoqda: {cur}/{total} ({pct:.1f}%)", end="", flush=True)
-
-    res = process_video(src, dst, progress_callback=_print_progress)
-    print()
-    print(f"Tayyor: {res.output_path}")
-    print(f"Yong'in aniqlandimi: {res.fire_detected}")
-    print(f"Tutun aniqlandimi: {res.smoke_detected}")
-    for ev in res.events:
-        print(f"  -> [{ev.event_type}] frame {ev.frame_index}, {ev.timestamp_sec:.2f}s ({ev.confidence*100:.0f}%)")
+    res = process_video(src, dst)

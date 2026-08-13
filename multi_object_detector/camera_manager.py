@@ -231,7 +231,6 @@ class CameraWorker:
                 annotated = self._analyze(frame)
             except Exception as e:
                 import traceback
-                print(f"\n[CameraWorker:{self.name}] _analyze xatoligi: {e}")
                 traceback.print_exc()
                 stream_logger.log_error(self.id, self.name, self.source, f"Tahlil xatoligi: {e}")
                 annotated = frame
@@ -286,7 +285,6 @@ class CameraWorker:
 
             return filename
         except Exception as e:
-            print(f"[Dataset] Snapshot saqlashda xatolik: {e}")
             return None
 
     def _analyze(self, frame: np.ndarray) -> np.ndarray:

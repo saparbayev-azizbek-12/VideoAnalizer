@@ -31,8 +31,6 @@ def cmd_capture(args: argparse.Namespace) -> None:
     idx = len(existing)
 
     cap = _open_source(args.source)
-    print("Boshqaruv: 's' = saqlash, 'q' = chiqish.")
-    print("Taxtani kadrning turli joylariga (markaz VA chekkalar/burchaklar) qo'yib suratga oling.")
 
     criteria_flags = (
         cv2.CALIB_CB_ADAPTIVE_THRESH
@@ -43,7 +41,6 @@ def cmd_capture(args: argparse.Namespace) -> None:
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("Kadr o'qib bo'lmadi, tugatilmoqda.")
             break
 
         preview = frame.copy()
@@ -65,17 +62,12 @@ def cmd_capture(args: argparse.Namespace) -> None:
         if key == ord("s"):
             path = os.path.join(args.out, f"calib_{idx:03d}.png")
             cv2.imwrite(path, frame)
-            print(f"Saqlandi: {path}")
             idx += 1
         elif key == ord("q"):
             break
 
     cap.release()
     cv2.destroyAllWindows()
-    print(f"Jami {idx} ta surat saqlandi -> {args.out}")
-    if idx < 15:
-        print("Ogohlantirish: kamida 15-20 ta surat tavsiya etiladi, ayniqsa kadr chekkalarida.")
-
 
 def cmd_calibrate(args: argparse.Namespace) -> None:
     cols, rows = _parse_board(args.board)
@@ -91,7 +83,6 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
     images = sorted(glob.glob(os.path.join(args.images, "*.png"))
                      + glob.glob(os.path.join(args.images, "*.jpg")))
     if not images:
-        print(f"'{args.images}' papkasida rasm topilmadi.", file=sys.stderr)
         sys.exit(1)
 
     subpix_criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -105,7 +96,6 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
 
         found, corners = cv2.findChessboardCorners(gray, (cols, rows))
         if not found:
-            print(f"  [o'tkazib yuborildi] taxta topilmadi: {path}")
             continue
 
         corners_refined = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), subpix_criteria)
@@ -114,10 +104,7 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
         used += 1
 
     if used < 5:
-        print(f"Yetarli emas: faqat {used} ta suratda taxta topildi. Yana surat yig'ing.", file=sys.stderr)
         sys.exit(1)
-
-    print(f"{used}/{len(images)} ta suratda taxta topildi. Kalibratsiya hisoblanmoqda...")
 
     ret, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
         objpoints, imgpoints, image_size, None, None
@@ -130,19 +117,11 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
         total_error += err
     mean_error = total_error / len(objpoints)
 
-    print(f"camera_matrix:\n{camera_matrix}")
-    print(f"dist_coeffs:\n{dist_coeffs.ravel()}")
-    print(f"O'rtacha qayta-proyeksiya xatosi: {mean_error:.4f} piksel")
-    if mean_error > 1.0:
-        print("DIQQAT: xato 1 pikseldan yuqori — yoki ko'proq surat kerak, yoki fisheye linza.")
-
     np.savez(args.save,
              camera_matrix=camera_matrix,
              dist_coeffs=dist_coeffs,
              image_size=np.array(image_size),
              mean_error=mean_error)
-    print(f"Saqlandi: {args.save}")
-
 
 def cmd_test(args: argparse.Namespace) -> None:
     data = np.load(args.calib)
@@ -158,7 +137,6 @@ def cmd_test(args: argparse.Namespace) -> None:
     )
 
     cap = _open_source(args.source)
-    print("'q' = chiqish. Chap = asl kadr, o'ng = to'g'irlangan kadr.")
 
     while True:
         ret, frame = cap.read()

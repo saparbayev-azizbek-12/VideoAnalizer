@@ -788,13 +788,6 @@ def reencode_for_web(input_path: str, output_path: str) -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Foydalanish: python fall_detector.py <input_video> <output_video>")
         sys.exit(1)
     src, dst = sys.argv[1], sys.argv[2]
-    def _print_progress(cur: int, total: int) -> None:
-        if total:
-            pct = cur / total * 100
-            print(f"\rQayta ishlanmoqda: {cur}/{total} ({pct:.1f}%)", end="", flush=True)
-        else:
-            print(f"\rQayta ishlanmoqda: {cur}-frame", end="", flush=True)
-    res = process_video(src, dst, progress_callback=_print_progress)
+    res = process_video(src, dst)

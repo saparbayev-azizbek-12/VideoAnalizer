@@ -21,7 +21,7 @@ class SystemLogger:
                 with open(self.log_path, "w", encoding="utf-8") as f:
                     f.write(f"=== SYSTEM DEBUG LOG INITIALIZED AT {datetime.now()} ===\n")
         except Exception as e:
-            print(f"[SystemLogger] Log faylini yaratishda xatolik: {e}")
+            pass
 
     def log(self, level: str, tag: str, message: str, exc: Exception | None = None, throttle_sec: float = 0.0, throttle_key: str = ""):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -38,9 +38,7 @@ class SystemLogger:
                     f.write(log_line)
                     f.flush()
             except Exception as e:
-                print(f"[SystemLogger Write Error]: {e}")
-
-        print(f"[{level.upper():5s}] [{tag}] {message}")
+                pass
 
     def info(self, tag: str, message: str):
         self.log("INFO", tag, message)

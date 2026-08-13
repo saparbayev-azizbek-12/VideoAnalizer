@@ -92,8 +92,8 @@ class CameraStreamLogger:
                 with open(self.log_path, "a", encoding="utf-8") as f:
                     f.write(entry)
                     f.flush()
-            except Exception as e:
-                print(f"[StreamLogger] Log yozishda xatolik: {e}")
+            except Exception:
+                pass
 
     def log_connect_fail(self, camera_id: str, camera_name: str, source: str) -> str:
         diag = diagnose_rtsp_connection(source)
