@@ -3,6 +3,7 @@ import threading
 import numpy as np
 from ultralytics import YOLO
 from multi_object_detector import config
+from multi_object_detector.system_logger import sys_logger
 from multi_object_detector.analysis.detectors import fire_detector, danger_zone_detector, ppe_detector
 
 _state_lock = threading.Lock()
@@ -13,6 +14,8 @@ def set_enabled(model_id: str, enabled: bool) -> None:
         raise ValueError(f"Noma'lum model: {model_id}")
     with _state_lock:
         _enabled[model_id] = bool(enabled)
+    sys_logger.info("ModelsManager", f"Model '{model_id}' enabled status set to: {enabled}")
+
 
 def is_enabled(model_id: str) -> bool:
     with _state_lock:

@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from multi_object_detector import config
 from multi_object_detector import camera_manager
 from multi_object_detector.analysis import models_manager
+from multi_object_detector.system_logger import sys_logger
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
 app = FastAPI(title="AI Video Monitoring Server")
@@ -29,11 +30,20 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 @app.on_event("startup")
 def _startup() -> None:
-    models_manager.preload_all()
+    gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "None (CPU mode)"
+    sys_logger.info("Server", f"Server startup on device: {device} ({gpu_name})")
+    sys_logger.info("Server", f"Enabled models: {models_manager.get_all_enabled()}")
+    try:
+        models_manager.preload_all()
+        sys_logger.info("Server", "All models preloaded successfully.")
+    except Exception as e:
+        sys_logger.error("Server", f"Model preloading error: {e}", exc=e)
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
+    sys_logger.info("Server", "Server shutting down...")
     camera_manager.stop_all()
+
 
 @app.get("/api/health")
 async def health():

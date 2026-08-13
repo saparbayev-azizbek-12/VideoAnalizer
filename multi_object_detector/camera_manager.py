@@ -11,8 +11,10 @@ from collections import deque
 from multi_object_detector import config
 from dataclasses import dataclass, field
 from multi_object_detector.stream_logger import stream_logger
+from multi_object_detector.system_logger import sys_logger
 from multi_object_detector.analysis import models_manager, frame_filter
 from multi_object_detector.analysis.detectors import fall_detector, danger_zone_detector
+
 
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
@@ -244,7 +246,6 @@ class CameraWorker:
             return None
 
     def _analyze(self, frame: np.ndarray) -> np.ndarray:
-        import traceback as _tb
         if not frame_filter.is_frame_valid(frame):
             return frame
         out = frame
@@ -260,20 +261,19 @@ class CameraWorker:
                         extra["image"] = snap
                     self._log_event("fire", f"{ev['type']} aniqlandi ({ev['confidence'] * 100:.0f}%)", **extra)
             except Exception as e:
-                print(f"[{self.name}] FIRE xatoligi: {e}")
-                _tb.print_exc()
+                sys_logger.error("CameraWorker", f"[{self.name}] FIRE xatoligi: {e}", exc=e)
 
         # ── 2. Yiqilish ────────────────────────────────────────────────
         if models_manager.is_enabled("fall"):
             try:
                 if self._fall_model is None:
-                    print(f"[{self.name}] Fall model yuklanmoqda...")
+                    sys_logger.info("CameraWorker", f"[{self.name}] Fall model yuklanmoqda...")
                     self._fall_model = fall_detector.get_model()
-                    print(f"[{self.name}] Fall model yuklandi: {type(self._fall_model).__name__}")
+                    sys_logger.info("CameraWorker", f"[{self.name}] Fall model yuklandi: {type(self._fall_model).__name__}")
                 if self._fall_pose is None:
-                    print(f"[{self.name}] RTMPose yuklanmoqda...")
+                    sys_logger.info("CameraWorker", f"[{self.name}] RTMPose yuklanmoqda...")
                     self._fall_pose = fall_detector.create_pose_instance()
-                    print(f"[{self.name}] RTMPose yuklandi")
+                    sys_logger.info("CameraWorker", f"[{self.name}] RTMPose yuklandi")
 
                 out, fall_events, _any_fall = fall_detector.process_fall_frame(
                     out,
@@ -290,8 +290,7 @@ class CameraWorker:
                         extra["image"] = snap
                     self._log_event("fall", f"Yiqilish aniqlandi (ID {ev['track_id']})", **extra)
             except Exception as e:
-                print(f"[{self.name}] FALL xatoligi: {e}")
-                _tb.print_exc()
+                sys_logger.error("CameraWorker", f"[{self.name}] FALL xatoligi: {e}", exc=e)
 
         # ── 3. Xavfli hudud ────────────────────────────────────────────
         if models_manager.is_enabled("danger_zone"):
@@ -307,8 +306,7 @@ class CameraWorker:
                             extra["image"] = snap
                         self._log_event("danger_zone", f"Xavfli hududda {people_in_zone} kishi aniqlandi", **extra)
             except Exception as e:
-                print(f"[{self.name}] DANGER_ZONE xatoligi: {e}")
-                _tb.print_exc()
+                sys_logger.error("CameraWorker", f"[{self.name}] DANGER_ZONE xatoligi: {e}", exc=e)
 
         # ── 4. PPE ─────────────────────────────────────────────────────
         if models_manager.is_enabled("ppe"):
@@ -331,10 +329,10 @@ class CameraWorker:
                         )
                         self._log_event("ppe", f"PPE yo'q: {missing_str}", **extra)
             except Exception as e:
-                print(f"[{self.name}] PPE xatoligi: {e}")
-                _tb.print_exc()
+                sys_logger.error("CameraWorker", f"[{self.name}] PPE xatoligi: {e}", exc=e)
 
         return out
+
 
 
 _cameras: dict[str, CameraWorker] = {}

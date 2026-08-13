@@ -10,6 +10,7 @@ import supervision as sv
 from typing import Optional, Any
 from ultralytics import YOLO
 from multi_object_detector import config
+from multi_object_detector.system_logger import sys_logger
 
 PERSON_CLASS_ID = 0
 
@@ -19,13 +20,19 @@ def get_model() -> Any:
     global _PERSON_MODEL
     if _PERSON_MODEL is None:
         try:
-            # pyrefly: ignore [missing-import]
+            sys_logger.info("DangerZone", "RFDETRLarge yuklanmoqda...")
             from rfdetr import RFDETRLarge
             _PERSON_MODEL = RFDETRLarge()
+            sys_logger.info("DangerZone", "RFDETRLarge muvaffaqiyatli yuklandi.")
         except Exception as e:
-            print(f"[DangerZone] RFDETRLarge yuklashda ogohlantirish: {e}. YOLO ga o'tilmoqda.")
-            _PERSON_MODEL = YOLO(config.PERSON_MODEL_PATH)
+            sys_logger.warning("DangerZone", f"RFDETRLarge yuklanmadi: {e}. YOLO ga o'tilmoqda.", exc=e)
+            try:
+                _PERSON_MODEL = YOLO(config.PERSON_MODEL_PATH)
+                sys_logger.info("DangerZone", f"YOLO person modeli yuklandi: {config.PERSON_MODEL_PATH}")
+            except Exception as e2:
+                sys_logger.error("DangerZone", f"YOLO modelini yuklab bo'lmadi: {e2}", exc=e2)
     return _PERSON_MODEL
+
 
 def load_zone(zone_path: str) -> np.ndarray:
     with open(zone_path, "r", encoding="utf-8") as f:

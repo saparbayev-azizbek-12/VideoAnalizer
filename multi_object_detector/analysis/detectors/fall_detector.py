@@ -12,6 +12,8 @@ from collections import deque
 from typing import Callable, Optional, Tuple, List, Union, Any
 from dataclasses import dataclass, field
 from multi_object_detector import config
+from multi_object_detector.system_logger import sys_logger
+
 
 # COCO-17 Keypoint Indices for RTMPose
 KEYPOINT_NOSE = 0
@@ -138,12 +140,19 @@ def get_model() -> Any:
     global _PERSON_MODEL
     if _PERSON_MODEL is None:
         try:
+            sys_logger.info("FallDetector", "RFDETRLarge yuklanmoqda...")
             from rfdetr import RFDETRLarge
             _PERSON_MODEL = RFDETRLarge()
+            sys_logger.info("FallDetector", "RFDETRLarge muvaffaqiyatli yuklandi.")
         except Exception as e:
-            print(f"[FallDetector] RFDETRLarge yuklashda ogohlantirish: {e}. YOLO ga o'tilmoqda.")
-            _PERSON_MODEL = YOLO(config.PERSON_MODEL_PATH)
+            sys_logger.warning("FallDetector", f"RFDETRLarge yuklanmadi: {e}. YOLO modeliga o'tilmoqda.", exc=e)
+            try:
+                _PERSON_MODEL = YOLO(config.PERSON_MODEL_PATH)
+                sys_logger.info("FallDetector", f"YOLO person modeli yuklandi: {config.PERSON_MODEL_PATH}")
+            except Exception as e2:
+                sys_logger.error("FallDetector", f"YOLO modelini ham yuklab bo'lmadi: {e2}", exc=e2)
     return _PERSON_MODEL
+
 
 def calculate_angle(hip_center: tuple[float, float], shoulder_center: tuple[float, float]) -> float:
     dy = hip_center[1] - shoulder_center[1]
@@ -481,6 +490,7 @@ class RTMPoseEstimator:
             sys.path.insert(0, str(rtmlib_path))
 
         try:
+            sys_logger.info("RTMPose", f"RTMPose initialized (mode={self.mode}, backend={self.backend}, device={self.device})")
             from rtmlib import Body, RTMPose
             if self.onnx_model and os.path.exists(self.onnx_model):
                 self._body = RTMPose(
@@ -488,19 +498,23 @@ class RTMPoseEstimator:
                     backend=self.backend,
                     device=self.device,
                 )
+                sys_logger.info("RTMPose", f"RTMPose loaded ONNX model: {self.onnx_model}")
             else:
                 self._body = Body(
                     mode=self.mode,
                     backend=self.backend,
                     device=self.device,
                 )
+                sys_logger.info("RTMPose", "rtmlib Body muvaffaqiyatli yuklandi.")
         except Exception as e:
-            print(f"[RTMPose] rtmlib model init ogohlantirish: {e}")
+            sys_logger.warning("RTMPose", f"rtmlib Body init ogohlantirish: {e}", exc=e)
             try:
                 from rtmlib import Body
                 self._body = Body(mode=self.mode, backend="opencv", device="cpu")
+                sys_logger.info("RTMPose", "rtmlib Body OpenCV CPU fallback yuklandi.")
             except Exception as e2:
-                print(f"[RTMPose] Fallback init xatosi: {e2}")
+                sys_logger.error("RTMPose", f"RTMPose fallback init ham muvaffaqiyatsiz bo'ldi: {e2}", exc=e2)
+
 
     def __call__(self, img: np.ndarray, bboxes: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -742,42 +756,50 @@ def process_fall_frame(
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 detections = model.predict(frame_rgb)
             except Exception as _e2:
-                print(f"[process_fall_frame] model.predict() xatoligi: {_e2}")
+                sys_logger.error("process_fall_frame", f"RF-DETR predict() error: {_e2}", exc=_e2)
                 return frame, events, False
         except Exception as _e:
-            print(f"[process_fall_frame] model.predict() xatoligi: {_e}")
+            sys_logger.error("process_fall_frame", f"RF-DETR predict() error: {_e}", exc=_e)
             return frame, events, False
     else:
         try:
             res = model(frame, classes=[0], verbose=False)[0]
             detections = sv.Detections.from_ultralytics(res)
         except Exception as _e:
-            print(f"[process_fall_frame] YOLO predict xatoligi: {_e}")
+            sys_logger.error("process_fall_frame", f"YOLO predict error: {_e}", exc=_e)
             return frame, events, False
 
     # class_id None bo'lsa xavfsiz qaytish
     if detections is None or not hasattr(detections, "class_id") or detections.class_id is None:
-        print("[process_fall_frame] detections.class_id None yoki yo'q")
+        sys_logger.warning("process_fall_frame", f"Frame {frame_idx}: Detections object missing class_id or None (total det count={len(detections) if detections is not None else 0})")
         return frame, events, False
 
+    raw_det_count = len(detections)
     try:
         person_mask = (detections.class_id == 0)
         persons = detections[person_mask]
+        person_det_count = len(persons)
     except Exception as _e:
-        print(f"[process_fall_frame] person_mask xatoligi: {_e}")
+        sys_logger.error("process_fall_frame", f"person_mask filtering error: {_e}", exc=_e)
         return frame, events, False
 
     try:
         tracked_persons = tracker.update_with_detections(persons)
+        track_count = len(tracked_persons)
     except Exception as _e:
-        print(f"[process_fall_frame] ByteTrack xatoligi: {_e}")
+        sys_logger.error("process_fall_frame", f"ByteTrack update error: {_e}", exc=_e)
         tracked_persons = persons
+        track_count = len(tracked_persons)
+
+    if frame_idx % 30 == 0 or raw_det_count > 0:
+        sys_logger.info("process_fall_frame", f"Frame {frame_idx} [{width}x{height}]: Raw Detections={raw_det_count}, Persons={person_det_count}, Tracked={track_count}")
 
     # Aniqlangan barcha odamlarni vizual ko'rsatish (bbox yoki mask polygon)
     try:
         draw_person_detection(frame, tracked_persons)
     except Exception as _e:
-        print(f"[process_fall_frame] draw_person_detection xatoligi: {_e}")
+        sys_logger.error("process_fall_frame", f"draw_person_detection error: {_e}", exc=_e)
+
 
     if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
         for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
