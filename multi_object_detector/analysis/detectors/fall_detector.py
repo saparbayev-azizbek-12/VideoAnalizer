@@ -483,11 +483,22 @@ class RTMPoseEstimator:
         self._init_model()
 
     def _init_model(self):
-        # Check if rtmlib is in sys.path or project folder
+        # Search for rtmlib in project root, parent folders, user home, and system site-packages
         project_root = Path(__file__).resolve().parent.parent.parent.parent
-        rtmlib_path = project_root / "rtmlib"
-        if str(rtmlib_path) not in sys.path and rtmlib_path.exists():
-            sys.path.insert(0, str(rtmlib_path))
+        user_home = Path.home()
+        possible_rtmlib_paths = [
+            project_root / "rtmlib",
+            project_root.parent / "rtmlib",
+            user_home / "rtmlib",
+            user_home / "AppData" / "Roaming" / "Python" / "Python312" / "site-packages",
+            user_home / "AppData" / "Local" / "Programs" / "Python" / "Python312" / "Lib" / "site-packages",
+            Path("C:/Python312/Lib/site-packages"),
+            Path("C:/Users/ADMIN/AppData/Local/Programs/Python/Python312/Lib/site-packages"),
+            Path("C:/Users/ADMIN/AppData/Roaming/Python/Python312/site-packages"),
+        ]
+        for p in possible_rtmlib_paths:
+            if p.exists() and str(p) not in sys.path:
+                sys.path.insert(0, str(p))
 
         try:
             sys_logger.info("RTMPose", f"RTMPose initialized (mode={self.mode}, backend={self.backend}, device={self.device})")
@@ -514,6 +525,7 @@ class RTMPoseEstimator:
                 sys_logger.info("RTMPose", "rtmlib Body OpenCV CPU fallback yuklandi.")
             except Exception as e2:
                 sys_logger.error("RTMPose", f"RTMPose fallback init ham muvaffaqiyatsiz bo'ldi: {e2}", exc=e2)
+
 
 
     def __call__(self, img: np.ndarray, bboxes: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
@@ -776,7 +788,9 @@ def process_fall_frame(
 
     raw_det_count = len(detections)
     try:
-        person_mask = (detections.class_id == 0)
+        unique_class_ids = np.unique(detections.class_id) if hasattr(detections, "class_id") and detections.class_id is not None else []
+        # COCO 80-class uses class_id=0, COCO 91-class uses class_id=1 for person
+        person_mask = (detections.class_id == 0) | (detections.class_id == 1)
         persons = detections[person_mask]
         person_det_count = len(persons)
     except Exception as _e:
@@ -792,7 +806,8 @@ def process_fall_frame(
         track_count = len(tracked_persons)
 
     if frame_idx % 30 == 0 or raw_det_count > 0:
-        sys_logger.info("process_fall_frame", f"Frame {frame_idx} [{width}x{height}]: Raw Detections={raw_det_count}, Persons={person_det_count}, Tracked={track_count}")
+        sys_logger.info("process_fall_frame", f"Frame {frame_idx} [{width}x{height}]: Raw Detections={raw_det_count} (class_ids={list(unique_class_ids)}), Persons={person_det_count}, Tracked={track_count}")
+
 
     # Aniqlangan barcha odamlarni vizual ko'rsatish (bbox yoki mask polygon)
     try:

@@ -73,7 +73,9 @@ class DangerZoneState:
             result = self.model(frame, conf=conf, verbose=False)[0]
             detections = sv.Detections.from_ultralytics(result)
 
-        people = detections[detections.class_id == PERSON_CLASS_ID]
+        person_mask = (detections.class_id == 0) | (detections.class_id == 1)
+        people = detections[person_mask]
+
         in_zone_mask = self.zone.trigger(detections=people)
         people_in_zone = int(in_zone_mask.sum())
         breach = people_in_zone > 0
