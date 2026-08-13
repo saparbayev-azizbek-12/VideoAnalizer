@@ -99,10 +99,8 @@ def new_danger_zone_state(polygon: np.ndarray) -> danger_zone_detector.DangerZon
 def analyze_danger_zone(
     state: danger_zone_detector.DangerZoneState,
     frame: np.ndarray,
-    draw_boxes: bool | None = None,
+    draw_boxes: bool = True,
 ) -> tuple[np.ndarray, int, bool]:
-    if draw_boxes is None:
-        draw_boxes = not is_enabled("fall")
     with _zone_infer_lock:
         return state.analyze(
             frame,
@@ -110,10 +108,9 @@ def analyze_danger_zone(
             draw_boxes=draw_boxes,
         )
 
-def analyze_ppe(frame: np.ndarray, draw_person_boxes: bool | None = None) -> tuple[np.ndarray, list[dict], bool]:
+
+def analyze_ppe(frame: np.ndarray, draw_person_boxes: bool = True) -> tuple[np.ndarray, list[dict], bool]:
     model = get_ppe_model()
-    if draw_person_boxes is None:
-        draw_person_boxes = not is_enabled("fall")
     with _ppe_infer_lock:
         return ppe_detector.analyze_ppe_frame(
             frame,
