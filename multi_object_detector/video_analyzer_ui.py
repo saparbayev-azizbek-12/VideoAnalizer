@@ -110,9 +110,6 @@ def _analyze_frame_multi(
 
     # 3. Fall Detection
     if models_enabled.get("fall") and _fall_model is not None and _fall_pose is not None:
-        import mediapipe as mp
-        mp_drawing = mp.solutions.drawing_utils
-        mp_pose = mp.solutions.pose
         any_fall_detected = False
         try:
             results_det = _fall_model.track(
@@ -138,7 +135,7 @@ def _analyze_frame_multi(
                     state.last_seen_frame = frame_idx
                     ar = bh / max(bw, 1)
 
-                    # Padded crop for MediaPipe context
+                    # Padded crop for RTMPose context
                     pad_x = int(bw * 0.20)
                     pad_y = int(bh * 0.20)
                     cx1 = max(0, x1 - pad_x)
@@ -146,36 +143,44 @@ def _analyze_frame_multi(
                     cx2 = min(w_f, x2 + pad_x)
                     cy2 = min(h_f, y2 + pad_y)
                     crop = annotated[cy1:cy2, cx1:cx2].copy()
-                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                    pr = _fall_pose.process(crop_rgb)
+                    kpts, scs = _fall_pose(crop)
 
                     posture = "Unknown"
                     smoothed_angle = 0.0
 
-                    if pr.pose_landmarks:
-                        lms = pr.pose_landmarks.landmark
-                        cw = cx2 - cx1
-                        ch = cy2 - cy1
-                        l_sh = lms[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
-                        r_sh = lms[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
-                        l_hip = lms[mp_pose.PoseLandmark.LEFT_HIP.value]
-                        r_hip = lms[mp_pose.PoseLandmark.RIGHT_HIP.value]
+                    if len(kpts) > 0 and len(scs) > 0:
+                        kpt = kpts[0]
+                        sc = scs[0]
+                        if fall_detector.is_pose_reliable(sc):
+                            l_sh = kpt[fall_detector.KEYPOINT_LEFT_SHOULDER]
+                            r_sh = kpt[fall_detector.KEYPOINT_RIGHT_SHOULDER]
+                            l_hip = kpt[fall_detector.KEYPOINT_LEFT_HIP]
+                            r_hip = kpt[fall_detector.KEYPOINT_RIGHT_HIP]
 
-                        sh_vis = max(l_sh.visibility, r_sh.visibility)
-                        hip_vis = max(l_hip.visibility, r_hip.visibility)
+                            l_sh_sc = sc[fall_detector.KEYPOINT_LEFT_SHOULDER]
+                            r_sh_sc = sc[fall_detector.KEYPOINT_RIGHT_SHOULDER]
+                            l_hip_sc = sc[fall_detector.KEYPOINT_LEFT_HIP]
+                            r_hip_sc = sc[fall_detector.KEYPOINT_RIGHT_HIP]
 
-                        if sh_vis >= 0.20 and hip_vis >= 0.20:
-                            sh_x = (l_sh.x if l_sh.visibility >= r_sh.visibility else r_sh.x) * cw
-                            sh_y = (l_sh.y if l_sh.visibility >= r_sh.visibility else r_sh.y) * ch
-                            if l_sh.visibility >= 0.20 and r_sh.visibility >= 0.20:
-                                sh_x = (l_sh.x + r_sh.x) * 0.5 * cw
-                                sh_y = (l_sh.y + r_sh.y) * 0.5 * ch
+                            if l_sh_sc >= 0.20 and r_sh_sc >= 0.20:
+                                sh_x = (l_sh[0] + r_sh[0]) * 0.5
+                                sh_y = (l_sh[1] + r_sh[1]) * 0.5
+                            elif l_sh_sc >= 0.20:
+                                sh_x = float(l_sh[0])
+                                sh_y = float(l_sh[1])
+                            else:
+                                sh_x = float(r_sh[0])
+                                sh_y = float(r_sh[1])
 
-                            hip_x = (l_hip.x if l_hip.visibility >= r_hip.visibility else r_hip.x) * cw
-                            hip_y = (l_hip.y if l_hip.visibility >= r_hip.visibility else r_hip.y) * ch
-                            if l_hip.visibility >= 0.20 and r_hip.visibility >= 0.20:
-                                hip_x = (l_hip.x + r_hip.x) * 0.5 * cw
-                                hip_y = (l_hip.y + r_hip.y) * 0.5 * ch
+                            if l_hip_sc >= 0.20 and r_hip_sc >= 0.20:
+                                hip_x = (l_hip[0] + r_hip[0]) * 0.5
+                                hip_y = (l_hip[1] + r_hip[1]) * 0.5
+                            elif l_hip_sc >= 0.20:
+                                hip_x = float(l_hip[0])
+                                hip_y = float(l_hip[1])
+                            else:
+                                hip_x = float(r_hip[0])
+                                hip_y = float(r_hip[1])
 
                             dy = hip_y - sh_y
                             dx = hip_x - sh_x
@@ -184,13 +189,7 @@ def _analyze_frame_multi(
                             smoothed_angle = float(np.median(state.angle_history))
                             posture = fall_detector.classify_posture(smoothed_angle)
 
-                            mp_drawing.draw_landmarks(
-                                crop,
-                                pr.pose_landmarks,
-                                mp_pose.POSE_CONNECTIONS,
-                                mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2, circle_radius=2),
-                                mp_drawing.DrawingSpec(color=(0, 128, 255), thickness=2, circle_radius=2),
-                            )
+                            fall_detector.draw_pose_skeleton(crop, kpts, scs, kpt_thr=0.25)
                             annotated[cy1:cy2, cx1:cx2] = crop
 
                     # Geometric Aspect-Ratio Fallback
@@ -814,12 +813,7 @@ class VideoAnalyzerApp(tk.Tk):
             if self._fall_model is None:
                 self._fall_model = fall_detector.get_model()
             fall_m = self._fall_model
-            import mediapipe as mp
-            fall_pose = mp.solutions.pose.Pose(
-                static_image_mode=True,
-                min_detection_confidence=0.75,
-                min_tracking_confidence=0.75,
-            )
+            fall_pose = fall_detector.create_pose_instance()
 
         models_enabled = {k: v.get() for k, v in self._model_vars.items()}
         every_n = max(1, self._every_n_var.get())

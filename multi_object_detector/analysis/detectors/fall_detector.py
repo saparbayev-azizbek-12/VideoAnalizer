@@ -5,17 +5,39 @@ import sys
 import math
 import subprocess
 import numpy as np
-import mediapipe as mp
 from pathlib import Path
 from ultralytics import YOLO
 from collections import deque
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple, List, Union
 from dataclasses import dataclass, field
 from multi_object_detector import config
 
+# COCO-17 Keypoint Indices for RTMPose
+KEYPOINT_NOSE = 0
+KEYPOINT_LEFT_EYE = 1
+KEYPOINT_RIGHT_EYE = 2
+KEYPOINT_LEFT_EAR = 3
+KEYPOINT_RIGHT_EAR = 4
+KEYPOINT_LEFT_SHOULDER = 5
+KEYPOINT_RIGHT_SHOULDER = 6
+KEYPOINT_LEFT_ELBOW = 7
+KEYPOINT_RIGHT_ELBOW = 8
+KEYPOINT_LEFT_WRIST = 9
+KEYPOINT_RIGHT_WRIST = 10
+KEYPOINT_LEFT_HIP = 11
+KEYPOINT_RIGHT_HIP = 12
+KEYPOINT_LEFT_KNEE = 13
+KEYPOINT_RIGHT_KNEE = 14
+KEYPOINT_LEFT_ANKLE = 15
+KEYPOINT_RIGHT_ANKLE = 16
 
-mp_drawing = mp.solutions.drawing_utils
-mp_pose = mp.solutions.pose
+# COCO-17 Skeleton joint pairs (start_idx, end_idx)
+SKELETON_CONNECTIONS = [
+    (15, 13), (13, 11), (16, 14), (14, 12), (11, 12),
+    (5, 11), (6, 12), (5, 6), (5, 7), (6, 8),
+    (7, 9), (8, 10), (1, 2), (0, 1), (0, 2),
+    (1, 3), (2, 4), (3, 5), (4, 6)
+]
 
 _YOLO_MODEL: Optional[YOLO] = None
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -97,12 +119,17 @@ def is_valid_person_crop(bbox_w: int, bbox_h: int) -> bool:
         return False
     return True
 
-def is_pose_reliable(landmarks) -> bool:
-    sh_vis = max(landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].visibility,
-                 landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].visibility)
-    hip_vis = max(landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].visibility,
-                  landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].visibility)
-    return sh_vis >= 0.25 and hip_vis >= 0.25
+def is_pose_reliable(scores: np.ndarray, threshold: float = 0.25) -> bool:
+    """
+    Checks if shoulder and hip keypoints have sufficient confidence score in RTMPose.
+    """
+    if scores is None or len(scores) < 13:
+        return False
+    if scores.ndim > 1:
+        scores = scores[0]
+    sh_vis = max(float(scores[KEYPOINT_LEFT_SHOULDER]), float(scores[KEYPOINT_RIGHT_SHOULDER]))
+    hip_vis = max(float(scores[KEYPOINT_LEFT_HIP]), float(scores[KEYPOINT_RIGHT_HIP]))
+    return sh_vis >= threshold and hip_vis >= threshold
 
 def get_model() -> YOLO:
     global _YOLO_MODEL
@@ -210,6 +237,117 @@ def _aspect_dropped(aspect_history: deque, fps: int) -> bool:
         return False
     return cur_ratio < recent_max * ASPECT_DROP_RATIO
 
+def draw_pose_skeleton(
+    image: np.ndarray,
+    keypoints: np.ndarray,
+    scores: np.ndarray,
+    kpt_thr: float = 0.25,
+) -> np.ndarray:
+    """
+    Draws COCO-17 skeleton lines and keypoint circles on the given image.
+    Uses rtmlib.draw_skeleton when available, with a fast fallback.
+    """
+    if keypoints is None or scores is None or len(keypoints) == 0:
+        return image
+    try:
+        from rtmlib import draw_skeleton
+        return draw_skeleton(image, keypoints, scores, kpt_thr=kpt_thr)
+    except Exception:
+        pass
+
+    kpts = keypoints[0] if keypoints.ndim == 3 else keypoints
+    scs = scores[0] if scores.ndim == 2 else scores
+
+    # Draw skeleton connections
+    for p1_idx, p2_idx in SKELETON_CONNECTIONS:
+        if p1_idx < len(kpts) and p2_idx < len(kpts):
+            if scs[p1_idx] >= kpt_thr and scs[p2_idx] >= kpt_thr:
+                pt1 = (int(round(kpts[p1_idx][0])), int(round(kpts[p1_idx][1])))
+                pt2 = (int(round(kpts[p2_idx][0])), int(round(kpts[p2_idx][1])))
+                cv2.line(image, pt1, pt2, (0, 255, 255), 2, cv2.LINE_AA)
+
+    # Draw joint points
+    for idx, (x, y) in enumerate(kpts):
+        if scs[idx] >= kpt_thr:
+            cv2.circle(image, (int(round(x)), int(round(y))), 3, (0, 128, 255), -1, cv2.LINE_AA)
+
+    return image
+
+class RTMPoseEstimator:
+    """
+    RTMPose Wrapper for Human Pose Estimation via rtmlib.
+    """
+    def __init__(
+        self,
+        mode: str = "balanced",
+        backend: str = "onnxruntime",
+        device: str = "cpu",
+        onnx_model: Optional[str] = None,
+    ):
+        self.mode = mode
+        self.backend = backend
+        self.device = device
+        self.onnx_model = onnx_model
+        self._body = None
+        self._init_model()
+
+    def _init_model(self):
+        # Check if rtmlib is in sys.path or project folder
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        rtmlib_path = project_root / "rtmlib"
+        if str(rtmlib_path) not in sys.path and rtmlib_path.exists():
+            sys.path.insert(0, str(rtmlib_path))
+
+        try:
+            from rtmlib import Body, RTMPose
+            if self.onnx_model and os.path.exists(self.onnx_model):
+                self._body = RTMPose(
+                    onnx_model=self.onnx_model,
+                    backend=self.backend,
+                    device=self.device,
+                )
+            else:
+                self._body = Body(
+                    mode=self.mode,
+                    backend=self.backend,
+                    device=self.device,
+                )
+        except Exception as e:
+            print(f"[RTMPose] rtmlib model init ogohlantirish: {e}")
+            try:
+                from rtmlib import Body
+                self._body = Body(mode=self.mode, backend="opencv", device="cpu")
+            except Exception as e2:
+                print(f"[RTMPose] Fallback init xatosi: {e2}")
+
+    def __call__(self, img: np.ndarray, bboxes: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Runs RTMPose inference.
+        Returns:
+            keypoints: ndarray of shape (N, 17, 2)
+            scores: ndarray of shape (N, 17)
+        """
+        if self._body is None:
+            return np.empty((0, 17, 2)), np.empty((0, 17))
+        try:
+            if bboxes is not None and hasattr(self._body, "pose_model"):
+                return self._body(img, bboxes=bboxes)
+            return self._body(img)
+        except Exception as e:
+            return np.empty((0, 17, 2)), np.empty((0, 17))
+
+def create_pose_instance(
+    mode: Optional[str] = None,
+    backend: Optional[str] = None,
+    device: Optional[str] = None,
+    model_path: Optional[str] = None,
+) -> RTMPoseEstimator:
+    m = mode or getattr(config, "RTMPOSE_MODE", "balanced")
+    b = backend or getattr(config, "RTMPOSE_BACKEND", "onnxruntime")
+    d = device or getattr(config, "RTMPOSE_DEVICE", "cpu")
+    p = model_path or getattr(config, "RTMPOSE_MODEL_PATH", None)
+    return RTMPoseEstimator(mode=m, backend=b, device=d, onnx_model=p)
+
 def process_video(
     input_path: str,
     output_path: str,
@@ -228,137 +366,145 @@ def process_video(
     frame_idx = 0
     track_states: dict[int, TrackState] = {}
 
-    with mp_pose.Pose(
-        static_image_mode=True,
-        min_detection_confidence=0.75,
-        min_tracking_confidence=0.75,
-    ) as pose:
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frame_idx += 1
-            any_fall_this_frame = False
-            frame = undistort_frame(frame)
-            try:
-                results = get_model().track(frame, persist=True, classes=[0], tracker="bytetrack.yaml", verbose=False)
-            except Exception:
-                results = get_model()(frame, classes=[0], verbose=False)
-            for result in results:
-                boxes = result.boxes
-                if boxes.id is None:
+    pose = create_pose_instance()
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_idx += 1
+        any_fall_this_frame = False
+        frame = undistort_frame(frame)
+        try:
+            results = get_model().track(frame, persist=True, classes=[0], tracker="bytetrack.yaml", verbose=False)
+        except Exception:
+            results = get_model()(frame, classes=[0], verbose=False)
+        for result in results:
+            boxes = result.boxes
+            if boxes.id is None:
+                continue
+            for bbox, track_id_t in zip(boxes.xyxy, boxes.id):
+                track_id = int(track_id_t)
+                x1, y1, x2, y2 = map(int, bbox)
+                x1, y1 = max(x1, 0), max(y1, 0)
+                x2, y2 = min(x2, width), min(y2, height)
+                if x2 <= x1 or y2 <= y1:
                     continue
-                for bbox, track_id_t in zip(boxes.xyxy, boxes.id):
-                    track_id = int(track_id_t)
-                    x1, y1, x2, y2 = map(int, bbox)
-                    x1, y1 = max(x1, 0), max(y1, 0)
-                    x2, y2 = min(x2, width), min(y2, height)
-                    if x2 <= x1 or y2 <= y1:
-                        continue
-                    state = track_states.setdefault(track_id, TrackState())
-                    state.last_seen_frame = frame_idx
-                    bbox_w = x2 - x1
-                    bbox_h = y2 - y1
-                    if not is_valid_person_crop(bbox_w, bbox_h):
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 1)
-                        continue
-                    person_bbox = frame[y1:y2, x1:x2]
-                    person_bbox_rgb = cv2.cvtColor(person_bbox, cv2.COLOR_BGR2RGB)
-                    person_results = pose.process(person_bbox_rgb)
-                    posture = None
-                    if person_results.pose_landmarks:
-                        landmarks = person_results.pose_landmarks.landmark
-                        if is_pose_reliable(landmarks):
-                            h, w = person_bbox.shape[:2]
-                            shoulders = [
-                                (landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x * w, landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y * h),
-                                (landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x * w, landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y * h),
-                            ]
-                            hips = [
-                                (landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x * w, landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y * h),
-                                (landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].x * w, landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].y * h),
-                            ]
-                            shoulder_center = (
-                                (shoulders[0][0] + shoulders[1][0]) / 2,
-                                (shoulders[0][1] + shoulders[1][1]) / 2,
-                            )
-                            hip_center = (
-                                (hips[0][0] + hips[1][0]) / 2,
-                                (hips[0][1] + hips[1][1]) / 2,
-                            )
-                            raw_angle = calculate_angle(hip_center, shoulder_center)
-                            state.angle_history.append(raw_angle)
-                            smoothed_angle = float(np.median(state.angle_history))
-                            posture = classify_posture(smoothed_angle)
-                            hip_y_abs = y1 + hip_center[1]
-                            state.hip_history.append((frame_idx, hip_y_abs, bbox_h))
-                            aspect_ratio = bbox_h / max(bbox_w, 1)
-                            state.aspect_history.append((frame_idx, aspect_ratio))
-                            velocity = _vertical_velocity(state.hip_history, fps)
-                            aspect_drop = _aspect_dropped(state.aspect_history, fps)
-                            fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
-                            mp_drawing.draw_landmarks(person_bbox, person_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-                            label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}°) v={velocity:.2f}"
-                            cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
-                            if posture in ("Falling", "Lying Down"):
-                                state.falling_count += 1
-                            else:
-                                state.falling_count = 0
-                            min_f = FALL_MIN_FRAMES_RATIO * fps
-                            max_f = FALL_MAX_FRAMES_RATIO * fps
-                            angle_condition = min_f <= state.falling_count <= max_f
-                            can_trigger = (
-                                angle_condition
-                                and fast_signal
-                                and state.standing_frames >= STANDING_MIN_FRAMES
-                            )
-                            if can_trigger:
-                                state.confirm_count += 1
-                            else:
-                                state.confirm_count = max(0, state.confirm_count - 1)
-                            if state.confirm_count >= FALL_CONFIRM_FRAMES:
-                                if not state.fall_detected:
-                                    fall_events.append(FallEvent(frame_index=frame_idx, timestamp_sec=frame_idx / fps, track_id=track_id))
-                                state.fall_detected = True
-                            if posture == "Standing":
-                                state.fall_detected = False
-                                state.confirm_count = 0
-                                state.standing_frames += 1
-                            else:
-                                state.standing_frames = 0
-                            if state.fall_detected:
-                                any_fall_this_frame = True
-                    frame[y1:y2, x1:x2] = person_bbox
-                    box_color = (0, 0, 255) if (posture == "Falling" and state.fall_detected) else (255, 0, 0)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+                state = track_states.setdefault(track_id, TrackState())
+                state.last_seen_frame = frame_idx
+                bbox_w = x2 - x1
+                bbox_h = y2 - y1
+                if not is_valid_person_crop(bbox_w, bbox_h):
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 1)
+                    continue
 
-            stale_ids = [tid for tid, st in track_states.items() if frame_idx - st.last_seen_frame > TRACK_TTL_FRAMES]
-            for tid in stale_ids:
-                del track_states[tid]
+                person_bbox = frame[y1:y2, x1:x2].copy()
+                kpts, scs = pose(person_bbox)
+                posture = None
 
-            if any_fall_this_frame:
-                cv2.putText(frame, "FALL DETECTED", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3, cv2.LINE_AA)
-            out.write(frame)
-            if progress_callback is not None:
-                progress_callback(frame_idx, total_frames)
+                if len(kpts) > 0 and len(scs) > 0:
+                    kpt = kpts[0]
+                    sc = scs[0]
+                    if is_pose_reliable(sc):
+                        l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
+                        r_sh = kpt[KEYPOINT_RIGHT_SHOULDER]
+                        l_hip = kpt[KEYPOINT_LEFT_HIP]
+                        r_hip = kpt[KEYPOINT_RIGHT_HIP]
+
+                        l_sh_sc = sc[KEYPOINT_LEFT_SHOULDER]
+                        r_sh_sc = sc[KEYPOINT_RIGHT_SHOULDER]
+                        l_hip_sc = sc[KEYPOINT_LEFT_HIP]
+                        r_hip_sc = sc[KEYPOINT_RIGHT_HIP]
+
+                        # Calculate shoulder center
+                        if l_sh_sc >= 0.20 and r_sh_sc >= 0.20:
+                            shoulder_center = ((l_sh[0] + r_sh[0]) / 2.0, (l_sh[1] + r_sh[1]) / 2.0)
+                        elif l_sh_sc >= 0.20:
+                            shoulder_center = (float(l_sh[0]), float(l_sh[1]))
+                        else:
+                            shoulder_center = (float(r_sh[0]), float(r_sh[1]))
+
+                        # Calculate hip center
+                        if l_hip_sc >= 0.20 and r_hip_sc >= 0.20:
+                            hip_center = ((l_hip[0] + r_hip[0]) / 2.0, (l_hip[1] + r_hip[1]) / 2.0)
+                        elif l_hip_sc >= 0.20:
+                            hip_center = (float(l_hip[0]), float(l_hip[1]))
+                        else:
+                            hip_center = (float(r_hip[0]), float(r_hip[0]))
+
+                        raw_angle = calculate_angle(hip_center, shoulder_center)
+                        state.angle_history.append(raw_angle)
+                        smoothed_angle = float(np.median(state.angle_history))
+                        posture = classify_posture(smoothed_angle)
+                        hip_y_abs = y1 + hip_center[1]
+                        state.hip_history.append((frame_idx, hip_y_abs, bbox_h))
+                        aspect_ratio = bbox_h / max(bbox_w, 1)
+                        state.aspect_history.append((frame_idx, aspect_ratio))
+                        velocity = _vertical_velocity(state.hip_history, fps)
+                        aspect_drop = _aspect_dropped(state.aspect_history, fps)
+                        fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
+
+                        draw_pose_skeleton(person_bbox, kpts, scs, kpt_thr=0.25)
+                        label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}°) v={velocity:.2f}"
+                        cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+
+                        if posture in ("Falling", "Lying Down"):
+                            state.falling_count += 1
+                        else:
+                            state.falling_count = 0
+
+                        min_f = FALL_MIN_FRAMES_RATIO * fps
+                        max_f = FALL_MAX_FRAMES_RATIO * fps
+                        angle_condition = min_f <= state.falling_count <= max_f
+                        can_trigger = (
+                            angle_condition
+                            and fast_signal
+                            and state.standing_frames >= STANDING_MIN_FRAMES
+                        )
+                        if can_trigger:
+                            state.confirm_count += 1
+                        else:
+                            state.confirm_count = max(0, state.confirm_count - 1)
+
+                        if state.confirm_count >= FALL_CONFIRM_FRAMES:
+                            if not state.fall_detected:
+                                fall_events.append(FallEvent(frame_index=frame_idx, timestamp_sec=frame_idx / fps, track_id=track_id))
+                            state.fall_detected = True
+
+                        if posture == "Standing":
+                            state.fall_detected = False
+                            state.confirm_count = 0
+                            state.standing_frames += 1
+                        else:
+                            state.standing_frames = 0
+
+                        if state.fall_detected:
+                            any_fall_this_frame = True
+
+                frame[y1:y2, x1:x2] = person_bbox
+                box_color = (0, 0, 255) if (posture == "Falling" and state.fall_detected) else (255, 0, 0)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+
+        stale_ids = [tid for tid, st in track_states.items() if frame_idx - st.last_seen_frame > TRACK_TTL_FRAMES]
+        for tid in stale_ids:
+            del track_states[tid]
+
+        if any_fall_this_frame:
+            cv2.putText(frame, "FALL DETECTED", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3, cv2.LINE_AA)
+        out.write(frame)
+        if progress_callback is not None:
+            progress_callback(frame_idx, total_frames)
 
     cap.release()
     out.release()
     return ProcessingResult(output_path=output_path, fps=fps, width=width, height=height, total_frames=frame_idx, fall_detected=len(fall_events) > 0, fall_events=fall_events)
-
-def create_pose_instance():
-    return mp_pose.Pose(
-        static_image_mode=True,
-        min_detection_confidence=0.75,
-        min_tracking_confidence=0.75,
-    )
 
 def process_fall_frame(
     frame: np.ndarray,
     frame_idx: int,
     fps: int,
     model: YOLO,
-    pose,
+    pose: RTMPoseEstimator,
     track_states: dict[int, TrackState],
 ) -> tuple[np.ndarray, list[dict], bool]:
     frame = undistort_frame(frame)
@@ -390,30 +536,41 @@ def process_fall_frame(
             if not is_valid_person_crop(bbox_w, bbox_h):
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 1)
                 continue
-            person_bbox = frame[y1:y2, x1:x2]
-            person_bbox_rgb = cv2.cvtColor(person_bbox, cv2.COLOR_BGR2RGB)
-            person_results = pose.process(person_bbox_rgb)
+
+            person_bbox = frame[y1:y2, x1:x2].copy()
+            kpts, scs = pose(person_bbox)
             posture = None
-            if person_results.pose_landmarks:
-                landmarks = person_results.pose_landmarks.landmark
-                if is_pose_reliable(landmarks):
-                    h, w = person_bbox.shape[:2]
-                    shoulders = [
-                        (landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x * w, landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y * h),
-                        (landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x * w, landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y * h),
-                    ]
-                    hips = [
-                        (landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x * w, landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y * h),
-                        (landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].x * w, landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].y * h),
-                    ]
-                    shoulder_center = (
-                        (shoulders[0][0] + shoulders[1][0]) / 2,
-                        (shoulders[0][1] + shoulders[1][1]) / 2,
-                    )
-                    hip_center = (
-                        (hips[0][0] + hips[1][0]) / 2,
-                        (hips[0][1] + hips[1][1]) / 2,
-                    )
+
+            if len(kpts) > 0 and len(scs) > 0:
+                kpt = kpts[0]
+                sc = scs[0]
+                if is_pose_reliable(sc):
+                    l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
+                    r_sh = kpt[KEYPOINT_RIGHT_SHOULDER]
+                    l_hip = kpt[KEYPOINT_LEFT_HIP]
+                    r_hip = kpt[KEYPOINT_RIGHT_HIP]
+
+                    l_sh_sc = sc[KEYPOINT_LEFT_SHOULDER]
+                    r_sh_sc = sc[KEYPOINT_RIGHT_SHOULDER]
+                    l_hip_sc = sc[KEYPOINT_LEFT_HIP]
+                    r_hip_sc = sc[KEYPOINT_RIGHT_HIP]
+
+                    # Calculate shoulder center
+                    if l_sh_sc >= 0.20 and r_sh_sc >= 0.20:
+                        shoulder_center = ((l_sh[0] + r_sh[0]) / 2.0, (l_sh[1] + r_sh[1]) / 2.0)
+                    elif l_sh_sc >= 0.20:
+                        shoulder_center = (float(l_sh[0]), float(l_sh[1]))
+                    else:
+                        shoulder_center = (float(r_sh[0]), float(r_sh[1]))
+
+                    # Calculate hip center
+                    if l_hip_sc >= 0.20 and r_hip_sc >= 0.20:
+                        hip_center = ((l_hip[0] + r_hip[0]) / 2.0, (l_hip[1] + r_hip[1]) / 2.0)
+                    elif l_hip_sc >= 0.20:
+                        hip_center = (float(l_hip[0]), float(l_hip[1]))
+                    else:
+                        hip_center = (float(r_hip[0]), float(r_hip[0]))
+
                     raw_angle = calculate_angle(hip_center, shoulder_center)
                     state.angle_history.append(raw_angle)
                     smoothed_angle = float(np.median(state.angle_history))
@@ -425,13 +582,16 @@ def process_fall_frame(
                     velocity = _vertical_velocity(state.hip_history, fps)
                     aspect_drop = _aspect_dropped(state.aspect_history, fps)
                     fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
-                    mp_drawing.draw_landmarks(person_bbox, person_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+
+                    draw_pose_skeleton(person_bbox, kpts, scs, kpt_thr=0.25)
                     label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}°) v={velocity:.2f}"
                     cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+
                     if posture in ("Falling", "Lying Down"):
                         state.falling_count += 1
                     else:
                         state.falling_count = 0
+
                     min_f = FALL_MIN_FRAMES_RATIO * fps
                     max_f = FALL_MAX_FRAMES_RATIO * fps
                     angle_condition = min_f <= state.falling_count <= max_f
@@ -444,18 +604,22 @@ def process_fall_frame(
                         state.confirm_count += 1
                     else:
                         state.confirm_count = max(0, state.confirm_count - 1)
+
                     if state.confirm_count >= FALL_CONFIRM_FRAMES:
                         if not state.fall_detected:
                             events.append({"track_id": track_id, "frame_index": frame_idx, "timestamp_sec": round(frame_idx / fps, 2)})
                         state.fall_detected = True
+
                     if posture == "Standing":
                         state.fall_detected = False
                         state.confirm_count = 0
                         state.standing_frames += 1
                     else:
                         state.standing_frames = 0
+
                     if state.fall_detected:
                         any_fall_this_frame = True
+
             frame[y1:y2, x1:x2] = person_bbox
             box_color = (0, 0, 255) if (posture == "Falling" and state.fall_detected) else (255, 0, 0)
             cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)

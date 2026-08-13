@@ -28,6 +28,11 @@ DANGER_ZONE_CONF_THRESHOLD = float(os.getenv("DANGER_ZONE_CONF_THRESHOLD", "0.35
 FALL_PERSON_CONF_THRESHOLD = float(os.getenv("FALL_PERSON_CONF_THRESHOLD", "0.40"))
 PPE_CONF_THRESHOLD = float(os.getenv("PPE_CONF_THRESHOLD", "0.40"))
 
+RTMPOSE_MODE = os.getenv("RTMPOSE_MODE", "balanced")
+RTMPOSE_BACKEND = os.getenv("RTMPOSE_BACKEND", "onnxruntime")
+RTMPOSE_DEVICE = os.getenv("RTMPOSE_DEVICE", "cpu")
+RTMPOSE_MODEL_PATH = os.getenv("RTMPOSE_MODEL_PATH", "")
+
 ANALYSIS_EVERY_N_FRAMES = 1
 
 MODEL_IDS = ("fire", "fall", "danger_zone", "ppe")
