@@ -52,9 +52,16 @@ class DangerZoneState:
     def analyze(self, frame: np.ndarray, conf: float = 0.35, draw_boxes: bool = True) -> tuple[np.ndarray, int, bool]:
         if hasattr(self.model, "predict") and not isinstance(self.model, YOLO):
             try:
-                detections = self.model.predict(frame, threshold=conf)
+                # rfdetr RGB formatni talab qiladi, OpenCV BGR beradi
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                detections = self.model.predict(frame_rgb, threshold=conf)
             except Exception:
-                detections = self.model.predict(frame)
+                try:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    detections = self.model.predict(frame_rgb)
+                except Exception as _e:
+                    print(f"[DangerZone] predict xatoligi: {_e}")
+                    return frame, 0, False
         else:
             result = self.model(frame, conf=conf, verbose=False)[0]
             detections = sv.Detections.from_ultralytics(result)

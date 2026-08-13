@@ -179,6 +179,9 @@ class CameraWorker:
             try:
                 annotated = self._analyze(frame.copy())
             except Exception as e:
+                import traceback
+                print(f"\n[CameraWorker:{self.name}] _analyze xatoligi: {e}")
+                traceback.print_exc()
                 stream_logger.log_error(self.id, self.name, self.source, f"Tahlil xatoligi: {e}")
                 annotated = frame
                 with self._lock:
@@ -241,70 +244,98 @@ class CameraWorker:
             return None
 
     def _analyze(self, frame: np.ndarray) -> np.ndarray:
+        import traceback as _tb
         if not frame_filter.is_frame_valid(frame):
             return frame
         out = frame
+
+        # ── 1. Yong'in / Tutun ─────────────────────────────────────────
         if models_manager.is_enabled("fire"):
-            out, fire_events, _has_fire, _has_smoke = models_manager.analyze_fire(out)
-            for ev in fire_events:
-                snap = self._save_dataset_snapshot("fire", out, ev)
-                extra = dict(box=ev["box"], confidence=ev["confidence"], type=ev["type"])
-                if snap:
-                    extra["image"] = snap
-                self._log_event("fire", f"{ev['type']} aniqlandi ({ev['confidence'] * 100:.0f}%)", **extra)
-
-        if models_manager.is_enabled("fall"):
-            if self._fall_model is None:
-                self._fall_model = fall_detector.get_model()
-                self._fall_pose = fall_detector.create_pose_instance()
-
-            out, fall_events, _any_fall = fall_detector.process_fall_frame(
-                out,
-                self.frame_idx,
-                max(1, int(round(self.fps_estimate))),
-                self._fall_model,
-                self._fall_pose,
-                self._fall_track_states,
-            )
-            for ev in fall_events:
-                snap = self._save_dataset_snapshot("fall", out, ev)
-                extra = dict(track_id=ev["track_id"])
-                if snap:
-                    extra["image"] = snap
-                self._log_event("fall", f"Yiqilish aniqlandi (ID {ev['track_id']})", **extra)
-
-        if models_manager.is_enabled("danger_zone"):
-            with self._zone_lock:
-                zone_state = self._zone_state
-            if zone_state is not None:
-                out, people_in_zone, breach = models_manager.analyze_danger_zone(zone_state, out)
-                if breach:
-                    snap = self._save_dataset_snapshot("danger_zone", out, {"people_in_zone": people_in_zone})
-                    extra = dict(people_in_zone=people_in_zone)
+            try:
+                out, fire_events, _has_fire, _has_smoke = models_manager.analyze_fire(out)
+                for ev in fire_events:
+                    snap = self._save_dataset_snapshot("fire", out, ev)
+                    extra = dict(box=ev["box"], confidence=ev["confidence"], type=ev["type"])
                     if snap:
                         extra["image"] = snap
-                    self._log_event("danger_zone", f"Xavfli hududda {people_in_zone} kishi aniqlandi", **extra)
+                    self._log_event("fire", f"{ev['type']} aniqlandi ({ev['confidence'] * 100:.0f}%)", **extra)
+            except Exception as e:
+                print(f"[{self.name}] FIRE xatoligi: {e}")
+                _tb.print_exc()
 
-        if models_manager.is_enabled("ppe"):
-            out, ppe_violations, has_ppe_violation = models_manager.analyze_ppe(out)
-            if has_ppe_violation:
-                snap = self._save_dataset_snapshot("ppe", out, {"violation_count": len(ppe_violations)})
-                for i, viol in enumerate(ppe_violations):
-                    extra = dict(
-                        box=viol["box"],
-                        confidence=viol["confidence"],
-                        missing=viol["missing"],
-                        type=viol["type"],
-                    )
-                    if snap and i == 0:
+        # ── 2. Yiqilish ────────────────────────────────────────────────
+        if models_manager.is_enabled("fall"):
+            try:
+                if self._fall_model is None:
+                    print(f"[{self.name}] Fall model yuklanmoqda...")
+                    self._fall_model = fall_detector.get_model()
+                    print(f"[{self.name}] Fall model yuklandi: {type(self._fall_model).__name__}")
+                if self._fall_pose is None:
+                    print(f"[{self.name}] RTMPose yuklanmoqda...")
+                    self._fall_pose = fall_detector.create_pose_instance()
+                    print(f"[{self.name}] RTMPose yuklandi")
+
+                out, fall_events, _any_fall = fall_detector.process_fall_frame(
+                    out,
+                    self.frame_idx,
+                    max(1, int(round(self.fps_estimate))),
+                    self._fall_model,
+                    self._fall_pose,
+                    self._fall_track_states,
+                )
+                for ev in fall_events:
+                    snap = self._save_dataset_snapshot("fall", out, ev)
+                    extra = dict(track_id=ev["track_id"])
+                    if snap:
                         extra["image"] = snap
-                    missing_str = ", ".join(
-                        "Kask" if m == "Safety Helmet" else "Xavfsizlik kiyimi"
-                        for m in viol["missing"]
-                    )
-                    self._log_event("ppe", f"PPE yo'q: {missing_str}", **extra)
+                    self._log_event("fall", f"Yiqilish aniqlandi (ID {ev['track_id']})", **extra)
+            except Exception as e:
+                print(f"[{self.name}] FALL xatoligi: {e}")
+                _tb.print_exc()
+
+        # ── 3. Xavfli hudud ────────────────────────────────────────────
+        if models_manager.is_enabled("danger_zone"):
+            try:
+                with self._zone_lock:
+                    zone_state = self._zone_state
+                if zone_state is not None:
+                    out, people_in_zone, breach = models_manager.analyze_danger_zone(zone_state, out)
+                    if breach:
+                        snap = self._save_dataset_snapshot("danger_zone", out, {"people_in_zone": people_in_zone})
+                        extra = dict(people_in_zone=people_in_zone)
+                        if snap:
+                            extra["image"] = snap
+                        self._log_event("danger_zone", f"Xavfli hududda {people_in_zone} kishi aniqlandi", **extra)
+            except Exception as e:
+                print(f"[{self.name}] DANGER_ZONE xatoligi: {e}")
+                _tb.print_exc()
+
+        # ── 4. PPE ─────────────────────────────────────────────────────
+        if models_manager.is_enabled("ppe"):
+            try:
+                out, ppe_violations, has_ppe_violation = models_manager.analyze_ppe(out)
+                if has_ppe_violation:
+                    snap = self._save_dataset_snapshot("ppe", out, {"violation_count": len(ppe_violations)})
+                    for i, viol in enumerate(ppe_violations):
+                        extra = dict(
+                            box=viol["box"],
+                            confidence=viol["confidence"],
+                            missing=viol["missing"],
+                            type=viol["type"],
+                        )
+                        if snap and i == 0:
+                            extra["image"] = snap
+                        missing_str = ", ".join(
+                            "Kask" if m == "Safety Helmet" else "Xavfsizlik kiyimi"
+                            for m in viol["missing"]
+                        )
+                        self._log_event("ppe", f"PPE yo'q: {missing_str}", **extra)
+            except Exception as e:
+                print(f"[{self.name}] PPE xatoligi: {e}")
+                _tb.print_exc()
 
         return out
+
 
 _cameras: dict[str, CameraWorker] = {}
 _registry_lock = threading.Lock()

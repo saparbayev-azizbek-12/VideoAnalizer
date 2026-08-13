@@ -204,9 +204,11 @@ def _analyze_frame_server(
 
             if hasattr(_fall_model, "predict") and not isinstance(_fall_model, YOLO):
                 try:
-                    detections = _fall_model.predict(annotated, threshold=config.FALL_PERSON_CONF_THRESHOLD)
+                    _frame_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                    detections = _fall_model.predict(_frame_rgb, threshold=config.FALL_PERSON_CONF_THRESHOLD)
                 except Exception:
-                    detections = _fall_model.predict(annotated)
+                    _frame_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                    detections = _fall_model.predict(_frame_rgb)
             else:
                 res = _fall_model(annotated, classes=[0], verbose=False)[0]
                 import supervision as sv

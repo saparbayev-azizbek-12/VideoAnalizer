@@ -570,9 +570,11 @@ def process_video(
 
         if hasattr(model, "predict") and not isinstance(model, YOLO):
             try:
-                detections = model.predict(frame, threshold=config.FALL_PERSON_CONF_THRESHOLD)
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                detections = model.predict(frame_rgb, threshold=config.FALL_PERSON_CONF_THRESHOLD)
             except Exception:
-                detections = model.predict(frame)
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                detections = model.predict(frame_rgb)
         else:
             res = model(frame, classes=[0], verbose=False)[0]
             detections = sv.Detections.from_ultralytics(res)
@@ -732,19 +734,50 @@ def process_fall_frame(
 
     if hasattr(model, "predict") and not isinstance(model, YOLO):
         try:
-            detections = model.predict(frame, threshold=config.FALL_PERSON_CONF_THRESHOLD)
-        except Exception:
-            detections = model.predict(frame)
+            # rfdetr RGB formatni talab qiladi, OpenCV BGR beradi
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            detections = model.predict(frame_rgb, threshold=config.FALL_PERSON_CONF_THRESHOLD)
+        except TypeError:
+            try:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                detections = model.predict(frame_rgb)
+            except Exception as _e2:
+                print(f"[process_fall_frame] model.predict() xatoligi: {_e2}")
+                return frame, events, False
+        except Exception as _e:
+            print(f"[process_fall_frame] model.predict() xatoligi: {_e}")
+            return frame, events, False
     else:
-        res = model(frame, classes=[0], verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(res)
+        try:
+            res = model(frame, classes=[0], verbose=False)[0]
+            detections = sv.Detections.from_ultralytics(res)
+        except Exception as _e:
+            print(f"[process_fall_frame] YOLO predict xatoligi: {_e}")
+            return frame, events, False
 
-    person_mask = (detections.class_id == 0)
-    persons = detections[person_mask]
-    tracked_persons = tracker.update_with_detections(persons)
+    # class_id None bo'lsa xavfsiz qaytish
+    if detections is None or not hasattr(detections, "class_id") or detections.class_id is None:
+        print("[process_fall_frame] detections.class_id None yoki yo'q")
+        return frame, events, False
+
+    try:
+        person_mask = (detections.class_id == 0)
+        persons = detections[person_mask]
+    except Exception as _e:
+        print(f"[process_fall_frame] person_mask xatoligi: {_e}")
+        return frame, events, False
+
+    try:
+        tracked_persons = tracker.update_with_detections(persons)
+    except Exception as _e:
+        print(f"[process_fall_frame] ByteTrack xatoligi: {_e}")
+        tracked_persons = persons
 
     # Aniqlangan barcha odamlarni vizual ko'rsatish (bbox yoki mask polygon)
-    draw_person_detection(frame, tracked_persons)
+    try:
+        draw_person_detection(frame, tracked_persons)
+    except Exception as _e:
+        print(f"[process_fall_frame] draw_person_detection xatoligi: {_e}")
 
     if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
         for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
