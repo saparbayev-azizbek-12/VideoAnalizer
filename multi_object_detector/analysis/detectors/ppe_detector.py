@@ -53,6 +53,7 @@ def analyze_ppe_frame(
     model: Optional[YOLO] = None,
     conf: float = 0.40,
     iou_match_thresh: float = 0.10,
+    draw_person_boxes: bool = True,
 ) -> tuple[np.ndarray, list[dict], bool]:
     if model is None:
         model = get_model()
@@ -99,12 +100,13 @@ def analyze_ppe_frame(
         x1, y1, x2, y2 = map(int, p_box)
 
         if missing:
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_VIOLATE, 3)
-            label = "⚠ NO PPE: " + ", ".join(
-                "Helmet" if m == CLASS_SAFETY_HELMET else "Clothing"
-                for m in missing
-            )
-            _draw_label(annotated, label, x1, y1, COLOR_VIOLATE)
+            if draw_person_boxes:
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_VIOLATE, 3)
+                label = "⚠ NO PPE: " + ", ".join(
+                    "Helmet" if m == CLASS_SAFETY_HELMET else "Clothing"
+                    for m in missing
+                )
+                _draw_label(annotated, label, x1, y1, COLOR_VIOLATE)
             violations.append({
                 "box": [x1, y1, x2, y2],
                 "confidence": round(p_conf, 3),
@@ -112,8 +114,10 @@ def analyze_ppe_frame(
                 "type": "ppe_violation",
             })
         else:
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_OK, 3)
-            _draw_label(annotated, "✓ PPE OK", x1, y1, COLOR_OK)
+            if draw_person_boxes:
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_OK, 3)
+                _draw_label(annotated, "✓ PPE OK", x1, y1, COLOR_OK)
+
 
     for box, cf, name in all_detections:
         if name in PERSON_LIKE_CLASSES:

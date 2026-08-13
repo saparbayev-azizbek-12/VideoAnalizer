@@ -91,11 +91,14 @@ def analyze_danger_zone(
             draw_boxes=draw_boxes,
         )
 
-def analyze_ppe(frame: np.ndarray) -> tuple[np.ndarray, list[dict], bool]:
+def analyze_ppe(frame: np.ndarray, draw_person_boxes: bool | None = None) -> tuple[np.ndarray, list[dict], bool]:
     model = get_ppe_model()
+    if draw_person_boxes is None:
+        draw_person_boxes = not is_enabled("fall")
     with _ppe_infer_lock:
         return ppe_detector.analyze_ppe_frame(
             frame,
             model=model,
             conf=config.PPE_CONF_THRESHOLD,
+            draw_person_boxes=draw_person_boxes,
         )

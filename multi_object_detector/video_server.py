@@ -180,8 +180,12 @@ def _analyze_frame_server(
     # 2. PPE Detection
     if models_enabled.get("ppe") and _ppe_model is not None:
         try:
+            draw_person_b = not models_enabled.get("fall", False)
             ann, violations, has_v = ppe_detector.analyze_ppe_frame(
-                annotated, model=_ppe_model, conf=config.PPE_CONF_THRESHOLD
+                annotated,
+                model=_ppe_model,
+                conf=config.PPE_CONF_THRESHOLD,
+                draw_person_boxes=draw_person_b,
             )
             annotated = ann
             for v in violations:

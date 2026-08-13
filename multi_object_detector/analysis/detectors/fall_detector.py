@@ -696,125 +696,138 @@ def process_fall_frame(
         sys_logger.info("process_fall_frame", f"Frame {frame_idx} [{width}x{height}]: Raw Detections={raw_det_count} (class_ids={list(unique_class_ids)}), Persons={person_det_count}, Tracked={track_count}")
 
 
-    # Aniqlangan barcha odamlarni vizual ko'rsatish (bbox yoki mask polygon)
-    try:
-        draw_person_detection(frame, tracked_persons)
-    except Exception as _e:
-        sys_logger.error("process_fall_frame", f"draw_person_detection error: {_e}", exc=_e)
-
-
+    # Har bir aniqlangan odam uchun YAGONA (bitta) ramka va yorliq chizish
     if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
-        for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
+        for i, (bbox, track_id_t) in enumerate(zip(tracked_persons.xyxy, tracked_persons.tracker_id)):
             track_id = int(track_id_t)
+            conf_val = float(tracked_persons.confidence[i]) if tracked_persons.confidence is not None else 1.0
             x1, y1, x2, y2 = map(int, bbox)
             x1, y1 = max(x1, 0), max(y1, 0)
             x2, y2 = min(x2, width), min(y2, height)
             if x2 <= x1 or y2 <= y1:
                 continue
+
             state = track_states.setdefault(track_id, TrackState())
             state.last_seen_frame = frame_idx
             bbox_w = x2 - x1
             bbox_h = y2 - y1
-            if not is_valid_person_crop(bbox_w, bbox_h):
-                continue
 
-            person_bbox = frame[y1:y2, x1:x2].copy()
-            kpts, scs = pose(person_bbox)
-            posture = None
+            posture = "Standing"
+            smoothed_angle = 0.0
 
-            if len(kpts) > 0 and len(scs) > 0:
-                kpt = kpts[0]
-                sc = scs[0]
+            if is_valid_person_crop(bbox_w, bbox_h):
+                person_bbox = frame[y1:y2, x1:x2].copy()
+                kpts, scs = pose(person_bbox)
 
-                # RTMPose barcha nuqtalar va chiziqlari FULL-FRAME da chiziladi (raqamlarsiz)
-                draw_pose_skeleton_global(frame, kpts, scs, offset_x=x1, offset_y=y1, kpt_thr=0.20, draw_coords=False)
+                if len(kpts) > 0 and len(scs) > 0:
+                    kpt = kpts[0]
+                    sc = scs[0]
 
-                if is_pose_reliable(sc):
-                    l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
-                    r_sh = kpt[KEYPOINT_RIGHT_SHOULDER]
-                    l_hip = kpt[KEYPOINT_LEFT_HIP]
-                    r_hip = kpt[KEYPOINT_RIGHT_HIP]
+                    # RTMPose skelet chiziqlari va bo'g'inlari (raqamsiz)
+                    draw_pose_skeleton_global(frame, kpts, scs, offset_x=x1, offset_y=y1, kpt_thr=0.20, draw_coords=False)
 
-                    l_sh_sc = sc[KEYPOINT_LEFT_SHOULDER]
-                    r_sh_sc = sc[KEYPOINT_RIGHT_SHOULDER]
-                    l_hip_sc = sc[KEYPOINT_LEFT_HIP]
-                    r_hip_sc = sc[KEYPOINT_RIGHT_HIP]
+                    if is_pose_reliable(sc):
+                        l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
+                        r_sh = kpt[KEYPOINT_RIGHT_SHOULDER]
+                        l_hip = kpt[KEYPOINT_LEFT_HIP]
+                        r_hip = kpt[KEYPOINT_RIGHT_HIP]
 
-                    # Calculate shoulder center
-                    if l_sh_sc >= 0.20 and r_sh_sc >= 0.20:
-                        shoulder_center = ((l_sh[0] + r_sh[0]) / 2.0, (l_sh[1] + r_sh[1]) / 2.0)
-                    elif l_sh_sc >= 0.20:
-                        shoulder_center = (float(l_sh[0]), float(l_sh[1]))
-                    else:
-                        shoulder_center = (float(r_sh[0]), float(r_sh[1]))
+                        l_sh_sc = sc[KEYPOINT_LEFT_SHOULDER]
+                        r_sh_sc = sc[KEYPOINT_RIGHT_SHOULDER]
+                        l_hip_sc = sc[KEYPOINT_LEFT_HIP]
+                        r_hip_sc = sc[KEYPOINT_RIGHT_HIP]
 
-                    # Calculate hip center
-                    if l_hip_sc >= 0.20 and r_hip_sc >= 0.20:
-                        hip_center = ((l_hip[0] + r_hip[0]) / 2.0, (l_hip[1] + r_hip[1]) / 2.0)
-                    elif l_hip_sc >= 0.20:
-                        hip_center = (float(l_hip[0]), float(l_hip[1]))
-                    else:
-                        hip_center = (float(r_hip[0]), float(r_hip[0]))
+                        # Calculate shoulder center
+                        if l_sh_sc >= 0.20 and r_sh_sc >= 0.20:
+                            shoulder_center = ((l_sh[0] + r_sh[0]) / 2.0, (l_sh[1] + r_sh[1]) / 2.0)
+                        elif l_sh_sc >= 0.20:
+                            shoulder_center = (float(l_sh[0]), float(l_sh[1]))
+                        else:
+                            shoulder_center = (float(r_sh[0]), float(r_sh[1]))
 
-                    raw_angle = calculate_angle(hip_center, shoulder_center)
-                    state.angle_history.append(raw_angle)
-                    smoothed_angle = float(np.median(state.angle_history))
-                    posture = classify_posture(smoothed_angle)
-                    hip_y_abs = y1 + hip_center[1]
-                    state.hip_history.append((frame_idx, hip_y_abs, bbox_h))
-                    aspect_ratio = bbox_h / max(bbox_w, 1)
-                    state.aspect_history.append((frame_idx, aspect_ratio))
-                    velocity = _vertical_velocity(state.hip_history, fps)
-                    aspect_drop = _aspect_dropped(state.aspect_history, fps)
-                    fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
+                        # Calculate hip center
+                        if l_hip_sc >= 0.20 and r_hip_sc >= 0.20:
+                            hip_center = ((l_hip[0] + r_hip[0]) / 2.0, (l_hip[1] + r_hip[1]) / 2.0)
+                        elif l_hip_sc >= 0.20:
+                            hip_center = (float(l_hip[0]), float(l_hip[1]))
+                        else:
+                            hip_center = (float(r_hip[0]), float(r_hip[0]))
 
-                    # Draw torso vector on full frame
-                    sh_pt = (int(x1 + shoulder_center[0]), int(y1 + shoulder_center[1]))
-                    hip_pt = (int(x1 + hip_center[0]), int(y1 + hip_center[1]))
-                    cv2.line(frame, sh_pt, hip_pt, (0, 0, 255), 3, cv2.LINE_AA)
-                    cv2.circle(frame, sh_pt, 5, (0, 255, 255), -1, cv2.LINE_AA)
-                    cv2.circle(frame, hip_pt, 5, (255, 0, 255), -1, cv2.LINE_AA)
+                        raw_angle = calculate_angle(hip_center, shoulder_center)
+                        state.angle_history.append(raw_angle)
+                        smoothed_angle = float(np.median(state.angle_history))
+                        posture = classify_posture(smoothed_angle)
+                        hip_y_abs = y1 + hip_center[1]
+                        state.hip_history.append((frame_idx, hip_y_abs, bbox_h))
+                        aspect_ratio = bbox_h / max(bbox_w, 1)
+                        state.aspect_history.append((frame_idx, aspect_ratio))
+                        velocity = _vertical_velocity(state.hip_history, fps)
+                        aspect_drop = _aspect_dropped(state.aspect_history, fps)
+                        fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
 
-                    label = f"ID{track_id}: {posture} ({smoothed_angle:.0f}deg)"
-                    cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2, cv2.LINE_AA)
+                        # Tana vektori chizig'i (Torso line)
+                        sh_pt = (int(x1 + shoulder_center[0]), int(y1 + shoulder_center[1]))
+                        hip_pt = (int(x1 + hip_center[0]), int(y1 + hip_center[1]))
+                        cv2.line(frame, sh_pt, hip_pt, (0, 0, 255), 3, cv2.LINE_AA)
+                        cv2.circle(frame, sh_pt, 5, (0, 255, 255), -1, cv2.LINE_AA)
+                        cv2.circle(frame, hip_pt, 5, (255, 0, 255), -1, cv2.LINE_AA)
 
+                        if posture in ("Falling", "Lying Down"):
+                            state.falling_count += 1
+                        else:
+                            state.falling_count = 0
 
-                    if posture in ("Falling", "Lying Down"):
-                        state.falling_count += 1
-                    else:
-                        state.falling_count = 0
+                        min_f = FALL_MIN_FRAMES_RATIO * fps
+                        max_f = FALL_MAX_FRAMES_RATIO * fps
+                        angle_condition = min_f <= state.falling_count <= max_f
+                        can_trigger = (
+                            angle_condition
+                            and fast_signal
+                            and state.standing_frames >= STANDING_MIN_FRAMES
+                        )
+                        if can_trigger:
+                            state.confirm_count += 1
+                        else:
+                            state.confirm_count = max(0, state.confirm_count - 1)
 
-                    min_f = FALL_MIN_FRAMES_RATIO * fps
-                    max_f = FALL_MAX_FRAMES_RATIO * fps
-                    angle_condition = min_f <= state.falling_count <= max_f
-                    can_trigger = (
-                        angle_condition
-                        and fast_signal
-                        and state.standing_frames >= STANDING_MIN_FRAMES
-                    )
-                    if can_trigger:
-                        state.confirm_count += 1
-                    else:
-                        state.confirm_count = max(0, state.confirm_count - 1)
+                        if state.confirm_count >= FALL_CONFIRM_FRAMES:
+                            if not state.fall_detected:
+                                events.append({"track_id": track_id, "frame_index": frame_idx, "timestamp_sec": round(frame_idx / max(fps, 1), 2)})
+                            state.fall_detected = True
 
-                    if state.confirm_count >= FALL_CONFIRM_FRAMES:
-                        if not state.fall_detected:
-                            events.append({"track_id": track_id, "frame_index": frame_idx, "timestamp_sec": round(frame_idx / fps, 2)})
-                        state.fall_detected = True
+                        if posture == "Standing":
+                            state.fall_detected = False
+                            state.confirm_count = 0
+                            state.standing_frames += 1
+                        else:
+                            state.standing_frames = 0
 
-                    if posture == "Standing":
-                        state.fall_detected = False
-                        state.confirm_count = 0
-                        state.standing_frames += 1
-                    else:
-                        state.standing_frames = 0
+            # Bitta odam uchun yagona rang va yagona yorliq
+            if state.fall_detected:
+                any_fall_this_frame = True
+                box_color = (0, 0, 255)  # Qizil - Yiqilgan
+                badge_text = f"FALL! ID{track_id} ({smoothed_angle:.0f}deg)"
+            elif posture == "Falling":
+                box_color = (0, 140, 255)  # To'q sariq - Yiqilmoqda
+                badge_text = f"ID{track_id}: Falling ({smoothed_angle:.0f}deg)"
+            elif posture == "Lying Down":
+                box_color = (0, 140, 255)  # To'q sariq - Yotgan
+                badge_text = f"ID{track_id}: Lying ({smoothed_angle:.0f}deg)"
+            else:
+                box_color = (0, 200, 60)  # Yashil - Tik turgan
+                badge_text = f"ID{track_id}: Standing ({smoothed_angle:.0f}deg)"
 
-                    if state.fall_detected:
-                        any_fall_this_frame = True
-                        # Yiqilish aniqlanganda bbox ustiga qizil ramka
-                        cv2.rectangle(frame, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 255), 3, cv2.LINE_AA)
-                        cv2.putText(frame, f"FALL! ID{track_id}", (x1, max(y1 - 30, 20)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+            # 1. Bitta yagona to'rtburchak ramka (Bounding box)
+            cv2.rectangle(frame, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), (0, 0, 0), 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2, cv2.LINE_AA)
+
+            # 2. Bitta yagona yorliq (Badge label)
+            (tw, th), bl = cv2.getTextSize(badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)
+            ty = max(th + 6, y1 - 4)
+            cv2.rectangle(frame, (x1, ty - th - 5), (x1 + tw + 6, ty + bl + 1), box_color, -1)
+            cv2.rectangle(frame, (x1, ty - th - 5), (x1 + tw + 6, ty + bl + 1), (0, 0, 0), 1)
+            cv2.putText(frame, badge_text, (x1 + 3, ty - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
+
 
     stale_ids = [tid for tid, st in track_states.items() if frame_idx - st.last_seen_frame > TRACK_TTL_FRAMES]
     for tid in stale_ids:
