@@ -198,188 +198,31 @@ def _analyze_frame_server(
 
     # 3. Fall Detection
     if models_enabled.get("fall") and _fall_model is not None and fall_pose is not None:
-        any_fall_detected = False
         try:
-            if not hasattr(_fall_model, "_tracker"):
-                import supervision as sv
-                _fall_model._tracker = sv.ByteTrack()
-            _fall_tracker = _fall_model._tracker
-
-            if hasattr(_fall_model, "predict") and not isinstance(_fall_model, YOLO):
-                try:
-                    _frame_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-                    detections = _fall_model.predict(_frame_rgb, threshold=config.FALL_PERSON_CONF_THRESHOLD)
-                except Exception:
-                    _frame_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-                    detections = _fall_model.predict(_frame_rgb)
-            else:
-                res = _fall_model(annotated, classes=[0], verbose=False)[0]
-                import supervision as sv
-                detections = sv.Detections.from_ultralytics(res)
-
-            # RF-DETR COCO-91: person=1, YOLO COCO-80: person=0
-            person_mask = (detections.class_id == 0) | (detections.class_id == 1)
-            persons = detections[person_mask]
-            tracked_persons = _fall_tracker.update_with_detections(persons)
-
-            # Aniqlangan barcha odamlarni vizual ko'rsatish (yashil bbox + yorliq)
-            fall_detector.draw_person_detection(annotated, tracked_persons)
-
-            if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
-                for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
-                    track_id = int(track_id_t)
-                    x1, y1, x2, y2 = map(int, bbox)
-                    x1, y1 = max(x1, 0), max(y1, 0)
-                    x2, y2 = min(x2, w_f), min(y2, h_f)
-                    if x2 <= x1 or y2 <= y1:
-                        continue
-                    bw, bh = x2 - x1, y2 - y1
-                    if max(bw, bh) < 30 or (bw * bh) < 500:
-                        continue
-
-                    state = fall_track_states.setdefault(track_id, fall_detector.TrackState())
-                    state.last_seen_frame = frame_idx
-                    ar = bh / max(bw, 1)
-
-                    # Padded crop for RTMPose context
-                    pad_x = int(bw * 0.20)
-                    pad_y = int(bh * 0.20)
-                    cx1 = max(0, x1 - pad_x)
-                    cy1 = max(0, y1 - pad_y)
-                    cx2 = min(w_f, x2 + pad_x)
-                    cy2 = min(h_f, y2 + pad_y)
-                    crop = annotated[cy1:cy2, cx1:cx2].copy()
-                    kpts, scs = fall_pose(crop)
-
-                    posture = "Unknown"
-                    smoothed_angle = 0.0
-
-                    if len(kpts) > 0 and len(scs) > 0:
-                        kpt = kpts[0]
-                        sc = scs[0]
-
-                        # RTMPose skeleton FULL-FRAME koordinatalarida (crop offset bilan)
-                        fall_detector.draw_pose_skeleton_global(
-                            annotated, kpts, scs,
-                            offset_x=cx1, offset_y=cy1,
-                            kpt_thr=0.20, draw_coords=True
-                        )
-
-                        if fall_detector.is_pose_reliable(sc):
-                            l_sh = kpt[fall_detector.KEYPOINT_LEFT_SHOULDER]
-                            r_sh = kpt[fall_detector.KEYPOINT_RIGHT_SHOULDER]
-                            l_hip = kpt[fall_detector.KEYPOINT_LEFT_HIP]
-                            r_hip = kpt[fall_detector.KEYPOINT_RIGHT_HIP]
-
-                            l_sh_sc = sc[fall_detector.KEYPOINT_LEFT_SHOULDER]
-                            r_sh_sc = sc[fall_detector.KEYPOINT_RIGHT_SHOULDER]
-                            l_hip_sc = sc[fall_detector.KEYPOINT_LEFT_HIP]
-                            r_hip_sc = sc[fall_detector.KEYPOINT_RIGHT_HIP]
-
-                            if l_sh_sc >= 0.20 and r_sh_sc >= 0.20:
-                                sh_x = (l_sh[0] + r_sh[0]) * 0.5
-                                sh_y = (l_sh[1] + r_sh[1]) * 0.5
-                            elif l_sh_sc >= 0.20:
-                                sh_x = float(l_sh[0])
-                                sh_y = float(l_sh[1])
-                            else:
-                                sh_x = float(r_sh[0])
-                                sh_y = float(r_sh[1])
-
-                            if l_hip_sc >= 0.20 and r_hip_sc >= 0.20:
-                                hip_x = (l_hip[0] + r_hip[0]) * 0.5
-                                hip_y = (l_hip[1] + r_hip[1]) * 0.5
-                            elif l_hip_sc >= 0.20:
-                                hip_x = float(l_hip[0])
-                                hip_y = float(l_hip[1])
-                            else:
-                                hip_x = float(r_hip[0])
-                                hip_y = float(r_hip[1])
-
-                            dy = hip_y - sh_y
-                            dx = hip_x - sh_x
-                            angle = abs(90.0 - np.degrees(math.atan2(dy, dx)))
-                            state.angle_history.append(angle)
-                            smoothed_angle = float(np.median(state.angle_history))
-                            posture = fall_detector.classify_posture(smoothed_angle)
-
-                            # Tana o'qi (torso) FULL-FRAME da chizish
-                            g_sh = (int(cx1 + sh_x), int(cy1 + sh_y))
-                            g_hip = (int(cx1 + hip_x), int(cy1 + hip_y))
-                            cv2.line(annotated, g_sh, g_hip, (0, 0, 255), 3, cv2.LINE_AA)
-                            cv2.circle(annotated, g_sh, 6, (0, 255, 255), -1, cv2.LINE_AA)
-                            cv2.circle(annotated, g_hip, 6, (255, 0, 255), -1, cv2.LINE_AA)
-
-                    # Geometric Aspect-Ratio Fallback
-                    if posture == "Unknown":
-                        if ar <= 0.85:
-                            posture = "Lying Down"
-                            smoothed_angle = max(65.0, 90.0 - (ar * 45.0))
-                        elif ar <= 1.15:
-                            posture = "Falling"
-                            smoothed_angle = 45.0
-                        else:
-                            posture = "Standing"
-                            smoothed_angle = 15.0
-
-                    state.posture_history.append(posture)
-
-                    # 5-frame window transition check
-                    is_transition_5f = fall_detector.check_5frame_transition(state.posture_history)
-
-                    if posture in ("Falling", "Lying Down") or ar < 0.90:
-                        state.falled_count += 1
-                        state.standing_frames = 0
-                    else:
-                        state.falled_count = max(0, state.falled_count - 1)
-                        state.standing_frames += 1
-
-                    # Trigger "FALLED" on 5-frame transition or sustained fallen posture
-                    if is_transition_5f or (state.is_falled and (posture in ("Falling", "Lying Down") or ar < 1.0)):
-                        state.is_falled = True
-                        if not state.fall_detected:
-                            events.append({
-                                "frame": frame_idx, "ts": round(ts, 3), "model": "fall",
-                                "label": "FALLED", "conf": None
-                            })
-                            state.fall_detected = True
-
-                    # Recovery reset when standing back up
-                    if posture == "Standing" and state.standing_frames >= 8 and ar > 1.25:
-                        state.is_falled = False
-                        state.fall_detected = False
-                        state.falled_count = 0
-
-                    # Holatga qarab rang va yorliq
-                    if state.is_falled or state.fall_detected:
-                        any_fall_detected = True
-                        box_color = (0, 0, 255)
-                        lbl_text = f"ID{track_id}: FALLED ({smoothed_angle:.0f}deg)"
-                    elif posture == "Falling":
-                        box_color = (0, 140, 255)
-                        lbl_text = f"ID{track_id}: Falling ({smoothed_angle:.0f}deg)"
-                    elif posture == "Lying Down":
-                        box_color = (0, 140, 255)
-                        lbl_text = f"ID{track_id}: Lying ({smoothed_angle:.0f}deg)"
-                    else:
-                        box_color = (0, 200, 60)
-                        lbl_text = f"ID{track_id}: Standing ({smoothed_angle:.0f}deg)"
-
-                    # Holatga mos ramka (draw_person_detection ustiga qo'shimcha)
-                    cv2.rectangle(annotated, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), (0, 0, 0), 2)
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2, cv2.LINE_AA)
-                    (tw, th), bl = cv2.getTextSize(lbl_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
-                    ty = max(th + 4, y1)
-                    cv2.rectangle(annotated, (x1, ty - th - 6), (x1 + tw + 6, ty + bl + 2), box_color, -1)
-                    cv2.putText(annotated, lbl_text, (x1 + 3, ty - 2),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
-
-            if any_fall_detected:
+            annotated, fall_events, any_fall = fall_detector.process_fall_frame(
+                frame=annotated,
+                frame_idx=frame_idx,
+                fps=max(1, int(round(fps))),
+                model=_fall_model,
+                pose=fall_pose,
+                track_states=fall_track_states,
+            )
+            for ev in fall_events:
+                events.append({
+                    "frame": frame_idx,
+                    "ts": round(ts, 3),
+                    "model": "fall",
+                    "label": "FALLED",
+                    "conf": None,
+                    "track_id": ev.get("track_id"),
+                })
+            if any_fall:
                 cv2.rectangle(annotated, (0, 0), (w_f, 42), (0, 0, 220), -1)
                 cv2.putText(annotated, "ALARM: FALL DETECTED (YIQILISH)", (20, 28),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[VideoServer] Fall frame error: {_e}")
+
 
 
     return annotated, events

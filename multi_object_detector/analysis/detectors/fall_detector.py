@@ -591,143 +591,31 @@ def process_video(
         if not ret:
             break
         frame_idx += 1
-        any_fall_this_frame = False
-        frame = undistort_frame(frame)
 
-        if hasattr(model, "predict") and not isinstance(model, YOLO):
-            try:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                detections = model.predict(frame_rgb, threshold=config.FALL_PERSON_CONF_THRESHOLD)
-            except Exception:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                detections = model.predict(frame_rgb)
-        else:
-            res = model(frame, classes=[0], verbose=False)[0]
-            detections = sv.Detections.from_ultralytics(res)
+        frame, new_events, any_fall = process_fall_frame(
+            frame=frame,
+            frame_idx=frame_idx,
+            fps=fps,
+            model=model,
+            pose=pose,
+            track_states=track_states,
+            tracker=tracker,
+        )
 
-        # RF-DETR COCO-91: person=1, YOLO COCO-80: person=0
-        person_mask = (detections.class_id == 0) | (detections.class_id == 1)
-        persons = detections[person_mask]
-        tracked_persons = tracker.update_with_detections(persons)
+        for ev in new_events:
+            fall_events.append(FallEvent(
+                frame_index=ev.get("frame_index", frame_idx),
+                timestamp_sec=ev.get("timestamp_sec", frame_idx / max(fps, 1)),
+                track_id=ev.get("track_id", 0)
+            ))
 
-        # Aniqlangan barcha odamlarni vizual ko'rsatish (bbox yoki mask polygon)
-        draw_person_detection(frame, tracked_persons)
+        if any_fall:
+            cv2.rectangle(frame, (0, 0), (width, 42), (0, 0, 220), -1)
+            cv2.putText(frame, "ALARM: FALL DETECTED (YIQILISH)", (20, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
 
-        if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
-            for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
-                track_id = int(track_id_t)
-                x1, y1, x2, y2 = map(int, bbox)
-                x1, y1 = max(x1, 0), max(y1, 0)
-                x2, y2 = min(x2, width), min(y2, height)
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                state = track_states.setdefault(track_id, TrackState())
-                state.last_seen_frame = frame_idx
-                bbox_w = x2 - x1
-                bbox_h = y2 - y1
-                if not is_valid_person_crop(bbox_w, bbox_h):
-                    continue
+        out.write(frame)
 
-                person_bbox = frame[y1:y2, x1:x2].copy()
-                kpts, scs = pose(person_bbox)
-                posture = None
-
-                if len(kpts) > 0 and len(scs) > 0:
-                    kpt = kpts[0]
-                    sc = scs[0]
-
-                    # RTMPose barcha nuqtalar va chiziqlari FULL-FRAME da chiziladi
-                    draw_pose_skeleton_global(frame, kpts, scs, offset_x=x1, offset_y=y1, kpt_thr=0.20, draw_coords=True)
-
-                    if is_pose_reliable(sc):
-                        l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
-                        r_sh = kpt[KEYPOINT_RIGHT_SHOULDER]
-                        l_hip = kpt[KEYPOINT_LEFT_HIP]
-                        r_hip = kpt[KEYPOINT_RIGHT_HIP]
-
-                        l_sh_sc = sc[KEYPOINT_LEFT_SHOULDER]
-                        r_sh_sc = sc[KEYPOINT_RIGHT_SHOULDER]
-                        l_hip_sc = sc[KEYPOINT_LEFT_HIP]
-                        r_hip_sc = sc[KEYPOINT_RIGHT_HIP]
-
-                        # Calculate shoulder center
-                        if l_sh_sc >= 0.20 and r_sh_sc >= 0.20:
-                            shoulder_center = ((l_sh[0] + r_sh[0]) / 2.0, (l_sh[1] + r_sh[1]) / 2.0)
-                        elif l_sh_sc >= 0.20:
-                            shoulder_center = (float(l_sh[0]), float(l_sh[1]))
-                        else:
-                            shoulder_center = (float(r_sh[0]), float(r_sh[1]))
-
-                        # Calculate hip center
-                        if l_hip_sc >= 0.20 and r_hip_sc >= 0.20:
-                            hip_center = ((l_hip[0] + r_hip[0]) / 2.0, (l_hip[1] + r_hip[1]) / 2.0)
-                        elif l_hip_sc >= 0.20:
-                            hip_center = (float(l_hip[0]), float(l_hip[1]))
-                        else:
-                            hip_center = (float(r_hip[0]), float(r_hip[0]))
-
-                        raw_angle = calculate_angle(hip_center, shoulder_center)
-                        state.angle_history.append(raw_angle)
-                        smoothed_angle = float(np.median(state.angle_history))
-                        posture = classify_posture(smoothed_angle)
-                        hip_y_abs = y1 + hip_center[1]
-                        state.hip_history.append((frame_idx, hip_y_abs, bbox_h))
-                        aspect_ratio = bbox_h / max(bbox_w, 1)
-                        state.aspect_history.append((frame_idx, aspect_ratio))
-                        velocity = _vertical_velocity(state.hip_history, fps)
-                        aspect_drop = _aspect_dropped(state.aspect_history, fps)
-                        fast_signal = (velocity >= VELOCITY_THRESHOLD) and aspect_drop
-
-                        # Draw torso vector on full frame
-                        sh_pt = (int(x1 + shoulder_center[0]), int(y1 + shoulder_center[1]))
-                        hip_pt = (int(x1 + hip_center[0]), int(y1 + hip_center[1]))
-                        cv2.line(frame, sh_pt, hip_pt, (0, 0, 255), 3, cv2.LINE_AA)
-                        cv2.circle(frame, sh_pt, 5, (0, 255, 255), -1, cv2.LINE_AA)
-                        cv2.circle(frame, hip_pt, 5, (255, 0, 255), -1, cv2.LINE_AA)
-
-                        label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}deg) [x:{x1},y:{y1}] v={velocity:.2f}"
-                        cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2, cv2.LINE_AA)
-
-                        if posture in ("Falling", "Lying Down"):
-                            state.falling_count += 1
-                        else:
-                            state.falling_count = 0
-
-                        min_f = FALL_MIN_FRAMES_RATIO * fps
-                        max_f = FALL_MAX_FRAMES_RATIO * fps
-                        angle_condition = min_f <= state.falling_count <= max_f
-                        can_trigger = (
-                            angle_condition
-                            and fast_signal
-                            and state.standing_frames >= STANDING_MIN_FRAMES
-                        )
-                        if can_trigger:
-                            state.confirm_count += 1
-                        else:
-                            state.confirm_count = max(0, state.confirm_count - 1)
-
-                        if state.confirm_count >= FALL_CONFIRM_FRAMES:
-                            if not state.fall_detected:
-                                fall_events.append(FallEvent(frame_index=frame_idx, timestamp_sec=frame_idx / fps, track_id=track_id))
-                            state.fall_detected = True
-
-                        if posture == "Standing":
-                            state.fall_detected = False
-                            state.confirm_count = 0
-                            state.standing_frames += 1
-                        else:
-                            state.standing_frames = 0
-
-                        if state.fall_detected:
-                            any_fall_this_frame = True
-                            # Yiqilish aniqlanganda bbox ustiga qizil ramka
-                            cv2.rectangle(frame, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 255), 3, cv2.LINE_AA)
-                            cv2.putText(frame, f"FALL! ID{track_id}", (x1, max(y1 - 30, 20)),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
-
-        stale_ids = [tid for tid, st in track_states.items() if frame_idx - st.last_seen_frame > TRACK_TTL_FRAMES]
-        for tid in stale_ids:
-            del track_states[tid]
 
         if any_fall_this_frame:
             cv2.putText(frame, "FALL DETECTED", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3, cv2.LINE_AA)
