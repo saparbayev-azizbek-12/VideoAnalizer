@@ -605,7 +605,8 @@ def process_video(
             res = model(frame, classes=[0], verbose=False)[0]
             detections = sv.Detections.from_ultralytics(res)
 
-        person_mask = (detections.class_id == 0)
+        # RF-DETR COCO-91: person=1, YOLO COCO-80: person=0
+        person_mask = (detections.class_id == 0) | (detections.class_id == 1)
         persons = detections[person_mask]
         tracked_persons = tracker.update_with_detections(persons)
 
