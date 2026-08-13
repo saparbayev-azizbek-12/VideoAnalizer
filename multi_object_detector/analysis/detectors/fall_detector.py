@@ -384,11 +384,10 @@ def draw_pose_skeleton(
     keypoints: np.ndarray,
     scores: np.ndarray,
     kpt_thr: float = 0.20,
-    draw_coords: bool = True,
+    draw_coords: bool = False,
 ) -> np.ndarray:
     """
-    COCO-17 skelet chiziqlar, nuqtalar va koordinatalarni berilgan image (crop yoki frame) ustiga chizadi.
-    Koordinatalar image-ga nisbatan (crop ichida yoki to'liq frame da).
+    COCO-17 skelet chiziqlari va bo'g'in nuqtalarini chizadi.
     """
     if keypoints is None or scores is None or len(keypoints) == 0:
         return image
@@ -405,15 +404,14 @@ def draw_pose_skeleton(
                 color = LIMB_COLORS[idx] if idx < len(LIMB_COLORS) else (0, 255, 255)
                 cv2.line(image, pt1, pt2, color, 2, cv2.LINE_AA)
 
-    # Bo'g'in nuqtalar va koordinatalar
+    # Bo'g'in nuqtalar
     for idx, (x, y) in enumerate(kpts):
         if scs[idx] >= kpt_thr:
             px, py = int(round(x)), int(round(y))
             color = KEYPOINT_COLORS[idx] if idx < len(KEYPOINT_COLORS) else (0, 255, 0)
             cv2.circle(image, (px, py), 4, color, -1, cv2.LINE_AA)
             cv2.circle(image, (px, py), 5, (255, 255, 255), 1, cv2.LINE_AA)
-            if draw_coords and idx in (KEYPOINT_LEFT_SHOULDER, KEYPOINT_RIGHT_SHOULDER,
-                                       KEYPOINT_LEFT_HIP, KEYPOINT_RIGHT_HIP):
+            if draw_coords:
                 coord_text = f"({px},{py})"
                 cv2.putText(image, coord_text, (px + 4, py - 4), cv2.FONT_HERSHEY_SIMPLEX,
                             0.35, (255, 255, 255), 1, cv2.LINE_AA)
@@ -427,7 +425,7 @@ def draw_pose_skeleton_global(
     offset_x: int,
     offset_y: int,
     kpt_thr: float = 0.20,
-    draw_coords: bool = True,
+    draw_coords: bool = False,
 ) -> np.ndarray:
     """
     RTMPose keypoint-larini FULL-FRAME koordinatalarida chizadi.
@@ -450,7 +448,7 @@ def draw_pose_skeleton_global(
                 color = LIMB_COLORS[idx] if idx < len(LIMB_COLORS) else (0, 255, 255)
                 cv2.line(frame, pt1, pt2, color, 2, cv2.LINE_AA)
 
-    # Bo'g'in nuqtalar va koordinatalar
+    # Bo'g'in nuqtalar
     for idx, (x, y) in enumerate(kpts):
         if scs[idx] >= kpt_thr:
             px = int(round(x)) + offset_x
@@ -463,6 +461,7 @@ def draw_pose_skeleton_global(
                 cv2.putText(frame, coord_text, (px + 4, py - 4), cv2.FONT_HERSHEY_SIMPLEX,
                             0.32, (220, 220, 220), 1, cv2.LINE_AA)
     return frame
+
 
 class RTMPoseEstimator:
     """
@@ -616,7 +615,6 @@ def process_video(
 
         out.write(frame)
 
-
         if any_fall_this_frame:
             cv2.putText(frame, "FALL DETECTED", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3, cv2.LINE_AA)
         out.write(frame)
@@ -728,8 +726,8 @@ def process_fall_frame(
                 kpt = kpts[0]
                 sc = scs[0]
 
-                # RTMPose barcha nuqtalar va chiziqlari FULL-FRAME da chiziladi
-                draw_pose_skeleton_global(frame, kpts, scs, offset_x=x1, offset_y=y1, kpt_thr=0.20, draw_coords=True)
+                # RTMPose barcha nuqtalar va chiziqlari FULL-FRAME da chiziladi (raqamlarsiz)
+                draw_pose_skeleton_global(frame, kpts, scs, offset_x=x1, offset_y=y1, kpt_thr=0.20, draw_coords=False)
 
                 if is_pose_reliable(sc):
                     l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
@@ -777,8 +775,9 @@ def process_fall_frame(
                     cv2.circle(frame, sh_pt, 5, (0, 255, 255), -1, cv2.LINE_AA)
                     cv2.circle(frame, hip_pt, 5, (255, 0, 255), -1, cv2.LINE_AA)
 
-                    label = f"ID{track_id}: {posture} ({smoothed_angle:.1f}deg) [x:{x1},y:{y1}] v={velocity:.2f}"
+                    label = f"ID{track_id}: {posture} ({smoothed_angle:.0f}deg)"
                     cv2.putText(frame, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2, cv2.LINE_AA)
+
 
                     if posture in ("Falling", "Lying Down"):
                         state.falling_count += 1
