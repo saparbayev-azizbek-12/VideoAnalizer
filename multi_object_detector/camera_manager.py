@@ -16,8 +16,8 @@ from multi_object_detector.stream_logger import stream_logger
 from multi_object_detector.analysis import models_manager, frame_filter
 from multi_object_detector.analysis.detectors import fall_detector, danger_zone_detector
 
-
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
+
 
 @dataclass
 class CameraEvent:
@@ -25,6 +25,7 @@ class CameraEvent:
     model: str
     label: str
     extra: dict = field(default_factory=dict)
+
 
 class CameraWorker:
     def __init__(self, cam_id: str, name: str, source: str):
@@ -250,7 +251,6 @@ class CameraWorker:
             return frame
         out = frame
 
-        # ── 1. Yong'in / Tutun ─────────────────────────────────────────
         if models_manager.is_enabled("fire"):
             try:
                 out, fire_events, _has_fire, _has_smoke = models_manager.analyze_fire(out)
@@ -263,7 +263,6 @@ class CameraWorker:
             except Exception as e:
                 sys_logger.error("CameraWorker", f"[{self.name}] FIRE xatoligi: {e}", exc=e)
 
-        # ── 2. Yiqilish ────────────────────────────────────────────────
         if models_manager.is_enabled("fall"):
             try:
                 if self._fall_model is None:
@@ -292,7 +291,6 @@ class CameraWorker:
             except Exception as e:
                 sys_logger.error("CameraWorker", f"[{self.name}] FALL xatoligi: {e}", exc=e)
 
-        # ── 3. Xavfli hudud ────────────────────────────────────────────
         if models_manager.is_enabled("danger_zone"):
             try:
                 with self._zone_lock:
@@ -308,7 +306,6 @@ class CameraWorker:
             except Exception as e:
                 sys_logger.error("CameraWorker", f"[{self.name}] DANGER_ZONE xatoligi: {e}", exc=e)
 
-        # ── 4. PPE ─────────────────────────────────────────────────────
         if models_manager.is_enabled("ppe"):
             try:
                 out, ppe_violations, has_ppe_violation = models_manager.analyze_ppe(out)
@@ -334,9 +331,9 @@ class CameraWorker:
         return out
 
 
-
 _cameras: dict[str, CameraWorker] = {}
 _registry_lock = threading.Lock()
+
 
 def add_camera(name: str, source: str) -> CameraWorker:
     cam_id = uuid.uuid4().hex[:8]
@@ -346,6 +343,7 @@ def add_camera(name: str, source: str) -> CameraWorker:
     worker.start()
     return worker
 
+
 def remove_camera(cam_id: str) -> bool:
     with _registry_lock:
         worker = _cameras.pop(cam_id, None)
@@ -354,13 +352,16 @@ def remove_camera(cam_id: str) -> bool:
     worker.stop()
     return True
 
+
 def get_camera(cam_id: str) -> Optional[CameraWorker]:
     with _registry_lock:
         return _cameras.get(cam_id)
 
+
 def list_cameras() -> list[CameraWorker]:
     with _registry_lock:
         return list(_cameras.values())
+
 
 def stop_all() -> None:
     with _registry_lock:

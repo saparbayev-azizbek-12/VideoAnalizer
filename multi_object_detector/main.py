@@ -9,8 +9,8 @@ from PIL import Image, ImageTk
 from multi_object_detector import config
 from tkinter import messagebox, filedialog
 
-
 MODEL_ICONS = {"fire": "🔥", "fall": "🚨", "danger_zone": "⛔", "ppe": "🦺"}
+
 
 class CameraPopout(tk.Toplevel):
     def __init__(self, app: "MonitoringApp", cam_id: str, cam_name: str):
@@ -66,6 +66,7 @@ class CameraPopout(tk.Toplevel):
         self._running = False
         self.app.popouts.pop(self.cam_id, None)
         self.destroy()
+
 
 class ZoneEditorWindow(tk.Toplevel):
     MAX_W, MAX_H = 900, 600
@@ -206,11 +207,13 @@ class ZoneEditorWindow(tk.Toplevel):
         messagebox.showinfo("Saqlandi", "Xavfli hudud saqlandi.", parent=self)
         self.destroy()
 
+
 class MonitoringApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(config.APP_TITLE)
-        self.root.geometry("1620x960")
+        self.geometry = "1620x960"
+        self.root.geometry(self.geometry)
         self.root.configure(bg="#1e1e1e")
 
         self.server_url = tk.StringVar(value=config.DEFAULT_SERVER_URL)
@@ -251,14 +254,14 @@ class MonitoringApp:
                  bg="#3c3c3c", fg="#ffffff", insertbackground="#ffffff").pack(side=tk.LEFT, padx=5)
 
         tk.Button(conn_frame, text="🔌 Ulanishni Tekshirish", command=self.check_server_connection,
-                  font=("Segoe UI", 10, "bold"), bg="#007acc", fg="#ffffff",
-                  activebackground="#005999", activeforeground="#ffffff",
-                  relief=tk.FLAT, padx=12, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=5)
+                   font=("Segoe UI", 10, "bold"), bg="#007acc", fg="#ffffff",
+                   activebackground="#005999", activeforeground="#ffffff",
+                   relief=tk.FLAT, padx=12, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=5)
 
         tk.Button(conn_frame, text="📦 Datasetni yuklab olish", command=self.download_dataset,
-                  font=("Segoe UI", 10, "bold"), bg="#6f42c1", fg="#ffffff",
-                  activebackground="#5a32a3", activeforeground="#ffffff",
-                  relief=tk.FLAT, padx=12, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=5)
+                   font=("Segoe UI", 10, "bold"), bg="#6f42c1", fg="#ffffff",
+                   activebackground="#5a32a3", activeforeground="#ffffff",
+                   relief=tk.FLAT, padx=12, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=5)
 
         self.conn_status_label = tk.Label(conn_frame, text="● Tekshirilmadi", font=("Segoe UI", 11, "bold"),
                                            fg="#ffcc00", bg="#252526")
@@ -674,10 +677,12 @@ class MonitoringApp:
                 pass
         self.root.destroy()
 
+
 def main() -> None:
     root = tk.Tk()
     MonitoringApp(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()

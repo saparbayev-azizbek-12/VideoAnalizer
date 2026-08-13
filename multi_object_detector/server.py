@@ -16,7 +16,6 @@ from multi_object_detector import camera_manager
 from multi_object_detector.analysis import models_manager
 from multi_object_detector.system_logger import sys_logger
 
-
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
 app = FastAPI(title="AI Video Monitoring Server")
 
@@ -30,6 +29,7 @@ app.add_middleware(
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+
 @app.on_event("startup")
 def _startup() -> None:
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "None (CPU mode)"
@@ -40,6 +40,7 @@ def _startup() -> None:
         sys_logger.info("Server", "All models preloaded successfully.")
     except Exception as e:
         sys_logger.error("Server", f"Model preloading error: {e}", exc=e)
+
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
@@ -58,9 +59,11 @@ async def health():
         "models": models_manager.get_all_enabled(),
     }
 
+
 class ModelToggleRequest(BaseModel):
     model_id: str
     enabled: bool
+
 
 @app.get("/api/models")
 async def list_models():
@@ -72,6 +75,7 @@ async def list_models():
         ]
     }
 
+
 @app.post("/api/models/toggle")
 async def toggle_model(req: ModelToggleRequest):
     try:
@@ -80,9 +84,11 @@ async def toggle_model(req: ModelToggleRequest):
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "model_id": req.model_id, "enabled": req.enabled}
 
+
 class CameraCreateRequest(BaseModel):
     name: str
     source: str
+
 
 def _camera_to_dict(cam: camera_manager.CameraWorker) -> dict:
     return {
@@ -95,9 +101,11 @@ def _camera_to_dict(cam: camera_manager.CameraWorker) -> dict:
         "last_error": cam.last_error,
     }
 
+
 @app.get("/api/cameras")
 async def list_cameras():
     return {"cameras": [_camera_to_dict(c) for c in camera_manager.list_cameras()]}
+
 
 @app.post("/api/cameras")
 async def create_camera(req: CameraCreateRequest):
@@ -106,6 +114,7 @@ async def create_camera(req: CameraCreateRequest):
     cam = camera_manager.add_camera(req.name.strip(), req.source.strip())
     return {"ok": True, "camera": _camera_to_dict(cam)}
 
+
 @app.delete("/api/cameras/{cam_id}")
 async def delete_camera(cam_id: str):
     ok = camera_manager.remove_camera(cam_id)
@@ -113,8 +122,10 @@ async def delete_camera(cam_id: str):
         raise HTTPException(status_code=404, detail="Kamera topilmadi")
     return {"ok": True}
 
+
 class ZoneRequest(BaseModel):
     polygon: list[list[int]]
+
 
 @app.get("/api/cameras/{cam_id}/zone")
 async def get_zone(cam_id: str):
@@ -122,6 +133,7 @@ async def get_zone(cam_id: str):
     if cam is None:
         raise HTTPException(status_code=404, detail="Kamera topilmadi")
     return {"polygon": cam.get_zone()}
+
 
 @app.post("/api/cameras/{cam_id}/zone")
 async def set_zone(cam_id: str, req: ZoneRequest):
@@ -133,6 +145,7 @@ async def set_zone(cam_id: str, req: ZoneRequest):
     cam.set_zone(req.polygon)
     return {"ok": True}
 
+
 @app.delete("/api/cameras/{cam_id}/zone")
 async def delete_zone(cam_id: str):
     cam = camera_manager.get_camera(cam_id)
@@ -141,12 +154,14 @@ async def delete_zone(cam_id: str):
     cam.clear_zone()
     return {"ok": True}
 
+
 @app.get("/api/cameras/{cam_id}/events")
 async def camera_events(cam_id: str, limit: int = 50):
     cam = camera_manager.get_camera(cam_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Kamera topilmadi")
     return {"events": cam.get_recent_events(limit)}
+
 
 @app.get("/api/events")
 async def all_events(limit: int = 100):
@@ -156,6 +171,7 @@ async def all_events(limit: int = 100):
             combined.append({"camera_id": cam.id, "camera_name": cam.name, **ev})
     combined.sort(key=lambda e: e["ts"], reverse=True)
     return {"events": combined[:limit]}
+
 
 @app.get("/api/dataset/info")
 async def dataset_info():
@@ -185,6 +201,7 @@ async def dataset_info():
         "total_size_mb": round(total_bytes / (1024 * 1024), 2),
     }
 
+
 @app.get("/api/dataset/download")
 async def download_dataset():
     dataset_dir = config.DATASET_DIR
@@ -207,16 +224,19 @@ async def download_dataset():
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
+
 def _placeholder_tile(w: int, h: int, text: str) -> np.ndarray:
     tile = np.zeros((h, w, 3), dtype=np.uint8)
     cv2.putText(tile, text, (10, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 100, 255), 2, cv2.LINE_AA)
     return tile
+
 
 def _encode_jpeg(frame: np.ndarray) -> bytes:
     ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
     if not ok:
         raise HTTPException(status_code=500, detail="Kadr kodlanmadi")
     return buf.tobytes()
+
 
 @app.get("/api/cameras/{cam_id}/preview")
 async def camera_preview(cam_id: str, raw: int = 0):
@@ -229,6 +249,7 @@ async def camera_preview(cam_id: str, raw: int = 0):
         frame = _placeholder_tile(640, 360, f"{cam.name}: ulanmoqda...")
 
     return Response(content=_encode_jpeg(frame), media_type="image/jpeg")
+
 
 @app.get("/api/cameras_grid_preview")
 async def cameras_grid_preview():
@@ -265,6 +286,7 @@ async def cameras_grid_preview():
 
     return Response(content=_encode_jpeg(grid), media_type="image/jpeg")
 
+
 @app.get("/api/logs/stream")
 async def get_stream_logs(limit: int = 100):
     log_path = config.CAMERA_LOG_PATH
@@ -278,6 +300,7 @@ async def get_stream_logs(limit: int = 100):
         return {"logs": recent, "total": len(lines), "log_file": log_path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Log faylini o'qishda xatolik: {e}")
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -17,9 +17,11 @@ def _open_source(source: str) -> cv2.VideoCapture:
         raise RuntimeError(f"Kamera manbasi ochilmadi: {source}")
     return cap
 
+
 def _parse_board(board: str) -> tuple[int, int]:
     cols_s, rows_s = board.lower().split("x")
     return int(cols_s), int(rows_s)
+
 
 def cmd_capture(args: argparse.Namespace) -> None:
     cols, rows = _parse_board(args.board)
@@ -73,6 +75,7 @@ def cmd_capture(args: argparse.Namespace) -> None:
     print(f"Jami {idx} ta surat saqlandi -> {args.out}")
     if idx < 15:
         print("Ogohlantirish: kamida 15-20 ta surat tavsiya etiladi, ayniqsa kadr chekkalarida.")
+
 
 def cmd_calibrate(args: argparse.Namespace) -> None:
     cols, rows = _parse_board(args.board)
@@ -129,10 +132,9 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
 
     print(f"camera_matrix:\n{camera_matrix}")
     print(f"dist_coeffs:\n{dist_coeffs.ravel()}")
-    print(f"O'rtacha qayta-proyeksiya xatosi (reprojection error): {mean_error:.4f} piksel")
+    print(f"O'rtacha qayta-proyeksiya xatosi: {mean_error:.4f} piksel")
     if mean_error > 1.0:
-        print("DIQQAT: xato 1 pikseldan yuqori — yoki ko'proq/xilma-xil surat kerak, "
-              "yoki linza juda 'fisheye' bo'lsa cv2.fisheye moduli mos kelishi mumkin.")
+        print("DIQQAT: xato 1 pikseldan yuqori — yoki ko'proq surat kerak, yoki fisheye linza.")
 
     np.savez(args.save,
              camera_matrix=camera_matrix,
@@ -140,6 +142,7 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
              image_size=np.array(image_size),
              mean_error=mean_error)
     print(f"Saqlandi: {args.save}")
+
 
 def cmd_test(args: argparse.Namespace) -> None:
     data = np.load(args.calib)
@@ -176,6 +179,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     cap.release()
     cv2.destroyAllWindows()
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Camera calibration", formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -202,6 +206,7 @@ def main() -> None:
 
     args = parser.parse_args()
     args.func(args)
+
 
 if __name__ == "__main__":
     main()

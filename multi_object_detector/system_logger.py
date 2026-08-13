@@ -5,9 +5,9 @@ import threading
 from datetime import datetime
 from multi_object_detector import config
 
-
 LOG_FILE_PATH = os.path.join(config.BASE_DIR, "system_debug.log")
 _log_lock = threading.Lock()
+
 
 class SystemLogger:
     def __init__(self, log_path: str = LOG_FILE_PATH):
@@ -27,12 +27,11 @@ class SystemLogger:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         thread_name = threading.current_thread().name
         log_line = f"[{now_str}] [{level.upper():5s}] [{thread_name}] [{tag}] {message}\n"
-        
+
         if exc is not None:
             tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
             log_line += f"  TRACEBACK:\n{tb_str}\n"
 
-        # Direct append to system_debug.log and stdout
         with _log_lock:
             try:
                 with open(self.log_path, "a", encoding="utf-8") as f:
@@ -41,7 +40,6 @@ class SystemLogger:
             except Exception as e:
                 print(f"[SystemLogger Write Error]: {e}")
 
-        # Also print to console
         print(f"[{level.upper():5s}] [{tag}] {message}")
 
     def info(self, tag: str, message: str):
@@ -55,5 +53,6 @@ class SystemLogger:
 
     def debug(self, tag: str, message: str):
         self.log("DEBUG", tag, message)
+
 
 sys_logger = SystemLogger()

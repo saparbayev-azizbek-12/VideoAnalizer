@@ -10,7 +10,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 
-
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 app = FastAPI(title="Camera Manual Remap Server")
@@ -23,24 +22,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class StartManualRequest(BaseModel):
     source: str
     k1: float = -0.15
     k2: float = 0.02
     focal_scale: float = 1.0
 
+
 class UpdateManualRequest(BaseModel):
     k1: float
     k2: float
     focal_scale: float = 1.0
 
+
 class SaveManualRequest(BaseModel):
     save_path: str = "calib.npz"
+
 
 class StartTestRequest(BaseModel):
     source: str
     calib_path: str = "calib.npz"
     alpha: float = 1.0
+
 
 class RemapManager:
     def __init__(self):
@@ -253,11 +257,14 @@ class RemapManager:
 
         cap.release()
 
+
 manager = RemapManager()
+
 
 @app.get("/api/health")
 def health():
     return {"status": "ok", "mode": manager.mode}
+
 
 @app.get("/api/status")
 def status():
@@ -270,6 +277,7 @@ def status():
             "k2": manager.manual_k2,
         }
 
+
 @app.post("/api/start_manual")
 def start_manual(req: StartManualRequest):
     try:
@@ -278,14 +286,17 @@ def start_manual(req: StartManualRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @app.post("/api/update_manual")
 def update_manual(req: UpdateManualRequest):
     manager.update_manual_params(req.k1, req.k2, req.focal_scale)
     return {"ok": True}
 
+
 @app.post("/api/save_manual")
 def save_manual(req: SaveManualRequest):
     return manager.save_manual_calibration(req.save_path.strip())
+
 
 @app.post("/api/start_test")
 def start_test(req: StartTestRequest):
@@ -295,16 +306,19 @@ def start_test(req: StartTestRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @app.post("/api/stop")
 def stop():
     manager.stop()
     return {"ok": True, "mode": "idle"}
+
 
 @app.get("/api/download_calib")
 def download_calib(filename: str = "calib.npz"):
     if not os.path.exists(filename):
         raise HTTPException(status_code=404, detail="Kalibratsiya fayli topilmadi")
     return FileResponse(filename, media_type="application/octet-stream", filename=os.path.basename(filename))
+
 
 def _gen_mjpeg_test():
     while True:
@@ -319,11 +333,13 @@ def _gen_mjpeg_test():
                 )
         time.sleep(0.04)
 
+
 @app.get("/api/test_feed")
 def test_feed():
     return StreamingResponse(
         _gen_mjpeg_test(), media_type="multipart/x-mixed-replace; boundary=frame"
     )
+
 
 if __name__ == "__main__":
     import uvicorn

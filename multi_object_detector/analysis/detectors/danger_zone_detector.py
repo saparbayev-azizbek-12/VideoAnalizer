@@ -13,9 +13,9 @@ from typing import Optional, Any
 from multi_object_detector import config
 from multi_object_detector.system_logger import sys_logger
 
-
 PERSON_CLASS_ID = 0
 _PERSON_MODEL: Optional[Any] = None
+
 
 def get_model() -> Any:
     global _PERSON_MODEL
@@ -43,6 +43,7 @@ def load_zone(zone_path: str) -> np.ndarray:
         sys.exit("Xatolik: zone.json faylida kamida 3 nuqta bo'lishi kerak.")
     return polygon
 
+
 class DangerZoneState:
     def __init__(self, polygon: np.ndarray, model: Optional[Any] = None):
         self.model = model or get_model()
@@ -60,7 +61,6 @@ class DangerZoneState:
     def analyze(self, frame: np.ndarray, conf: float = 0.35, draw_boxes: bool = True) -> tuple[np.ndarray, int, bool]:
         if hasattr(self.model, "predict") and not isinstance(self.model, YOLO):
             try:
-                # rfdetr RGB formatni talab qiladi, OpenCV BGR beradi
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 detections = self.model.predict(frame_rgb, threshold=conf)
             except Exception:
@@ -81,11 +81,9 @@ class DangerZoneState:
         people_in_zone = int(in_zone_mask.sum())
         breach = people_in_zone > 0
 
-        # Xavfli hudud poligonini chizish
         annotated = self.zone_annotator.annotate(scene=frame)
 
         if draw_boxes and len(people) > 0:
-            # Har bir odam uchun alohida rang: zonada → qizil, tashqarida → yashil
             for i in range(len(people)):
                 try:
                     x1, y1, x2, y2 = map(int, people.xyxy[i])
@@ -94,13 +92,11 @@ class DangerZoneState:
                     x2, y2 = min(w_img, x2), min(h_img, y2)
 
                     in_zone = bool(in_zone_mask[i]) if i < len(in_zone_mask) else False
-                    color = (0, 0, 220) if in_zone else (0, 200, 60)  # qizil / yashil (BGR)
+                    color = (0, 0, 220) if in_zone else (0, 200, 60)
 
-                    # Qalin kontur
                     cv2.rectangle(annotated, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), (0, 0, 0), 2)
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
-                    # Yorliq
                     conf_val = float(people.confidence[i]) if people.confidence is not None else 1.0
                     zone_tag = "⚠ ZONADA" if in_zone else "xavfsiz"
                     label = f"person {conf_val:.2f} [{zone_tag}]"
@@ -190,6 +186,7 @@ def main():
     print(f"Xavfli hududda odam bo'lgan kadrlar soni: {breach_frames}")
     print(f"Natija video: {args.output}")
     print(f"Log fayli: {args.log}")
+
 
 if __name__ == "__main__":
     main()

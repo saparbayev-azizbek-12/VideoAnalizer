@@ -15,14 +15,12 @@ from fastapi.responses import Response, FileResponse, StreamingResponse
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 
 from multi_object_detector import config
-from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter
+from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter, is_frame_valid
 from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
-
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PKG_DIR not in sys.path:
     sys.path.insert(0, os.path.dirname(_PKG_DIR))
-
 
 JOBS_DIR = os.path.join(config.BASE_DIR, "video_jobs")
 os.makedirs(JOBS_DIR, exist_ok=True)
@@ -151,8 +149,8 @@ def _analyze_frame_server(
     fps: float,
     models_enabled: dict[str, bool],
     fall_pose=None,
-    fall_track_states=None):
-    from multi_object_detector.analysis.frame_filter import is_frame_valid
+    fall_track_states=None,
+):
     if not is_frame_valid(frame):
         return frame, []
     annotated = frame.copy()
@@ -160,8 +158,6 @@ def _analyze_frame_server(
     ts = frame_idx / max(fps, 1.0)
     h_f, w_f = annotated.shape[:2]
 
-
-    # 1. Fire / Smoke
     if models_enabled.get("fire") and _fire_model is not None:
         try:
             ann, det_events, has_fire, has_smoke = fire_detector.detect_fire_frame(
@@ -179,7 +175,6 @@ def _analyze_frame_server(
         except Exception:
             pass
 
-    # 2. PPE Detection
     if models_enabled.get("ppe") and _ppe_model is not None:
         try:
             draw_person_b = not models_enabled.get("fall", False)
@@ -202,7 +197,6 @@ def _analyze_frame_server(
         except Exception:
             pass
 
-    # 3. Fall Detection
     if models_enabled.get("fall") and _fall_model is not None and fall_pose is not None:
         try:
             annotated, fall_events, any_fall = fall_detector.process_fall_frame(
@@ -228,8 +222,6 @@ def _analyze_frame_server(
                             cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
         except Exception as _e:
             print(f"[VideoServer] Fall frame error: {_e}")
-
-
 
     return annotated, events
 
@@ -327,14 +319,12 @@ def _process_video_job(job: VideoJob):
             except Exception:
                 pass
 
-    # Save reports
     with job._lock:
         if not job._stop_event.is_set() and job.status != "failed":
             job.status = "completed"
             job.progress_pct = 100.0
         job.completed_at = time.time()
 
-        # Write CSV
         try:
             with open(job.csv_path, "w", newline="", encoding="utf-8-sig") as f:
                 csv_writer = csv.DictWriter(f, fieldnames=["frame", "ts", "model", "label", "conf"])
@@ -350,7 +340,6 @@ def _process_video_job(job: VideoJob):
         except Exception:
             pass
 
-        # Write JSON
         try:
             with open(job.json_path, "w", encoding="utf-8") as f:
                 json.dump({
@@ -370,8 +359,6 @@ def _process_video_job(job: VideoJob):
         except Exception:
             pass
 
-
-# --- API Endpoints ---
 
 @app.get("/")
 def root():

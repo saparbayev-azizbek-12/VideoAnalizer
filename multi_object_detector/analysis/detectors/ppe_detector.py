@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 from multi_object_detector import config
 
-
 CLASS_PERSON = "Person"
 CLASS_SAFETY_HELMET = "Safety Helmet"
 CLASS_SAFETY_CLOTHING = "Safety Clothing"
@@ -26,17 +25,20 @@ COLOR_BANNER = (0, 0, 180)
 
 _ppe_model: Optional[YOLO] = None
 
+
 def get_model() -> YOLO:
     global _ppe_model
     if _ppe_model is None:
         _ppe_model = YOLO(config.PPE_MODEL_PATH)
     return _ppe_model
 
+
 @dataclass
 class PPEViolation:
     box: list[int]
     confidence: float
     missing: list[str]
+
 
 def _iou(boxA: list[float], boxB: list[float]) -> float:
     xA = max(boxA[0], boxB[0])
@@ -49,6 +51,7 @@ def _iou(boxA: list[float], boxB: list[float]) -> float:
     areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
     areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
     return inter / (areaA + areaB - inter + 1e-6)
+
 
 def analyze_ppe_frame(
     frame: np.ndarray,
@@ -120,7 +123,6 @@ def analyze_ppe_frame(
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), COLOR_OK, 3)
                 _draw_label(annotated, "✓ PPE OK", x1, y1, COLOR_OK)
 
-
     for box, cf, name in all_detections:
         if name in PERSON_LIKE_CLASSES:
             continue
@@ -131,23 +133,17 @@ def analyze_ppe_frame(
         (tw, th), bl = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         ty = max(th + 4, y1)
         cv2.rectangle(annotated, (x1, ty - th - 6), (x1 + tw + 6, ty + bl + 2), color, -1)
-        cv2.putText(
-            annotated, lbl,
-            (x1 + 3, ty - 2),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA
-        )
+        cv2.putText(annotated, lbl, (x1 + 3, ty - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
 
     has_violation = len(violations) > 0
     if has_violation:
         width = frame.shape[1]
         banner_txt = f"DIQQAT! {len(violations)} ta PPE QOIDABUZARLIK"
         cv2.rectangle(annotated, (0, 0), (width, 46), COLOR_BANNER, -1)
-        cv2.putText(
-            annotated, banner_txt,
-            (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA
-        )
+        cv2.putText(annotated, banner_txt, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
 
     return annotated, violations, has_violation
+
 
 def _draw_label(img: np.ndarray, text: str, x: int, y: int, color: tuple) -> None:
     font = cv2.FONT_HERSHEY_SIMPLEX

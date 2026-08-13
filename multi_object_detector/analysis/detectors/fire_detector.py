@@ -8,7 +8,6 @@ from collections import deque
 from typing import Callable, Optional
 from dataclasses import dataclass, field
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 VIT_MODEL_DIR = BASE_DIR / "analysis" / "models" / "vit-fire-detection"
 
@@ -22,11 +21,13 @@ _vit_processor = None
 _vit_model = None
 HF_REPO = "EdBianchi/vit-fire-detection"
 
+
 def _get_model_source() -> str:
     bin_file = VIT_MODEL_DIR / "pytorch_model.bin"
     if VIT_MODEL_DIR.exists() and bin_file.exists() and bin_file.stat().st_size > 10_000_000:
         return str(VIT_MODEL_DIR)
     return HF_REPO
+
 
 def get_model():
     global _vit_processor, _vit_model
@@ -44,6 +45,7 @@ def get_model():
             pass
     return _vit_processor, _vit_model
 
+
 def _classify_frame(processor, model, frame_bgr: np.ndarray) -> tuple[str, float]:
     import torch
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -60,6 +62,7 @@ def _classify_frame(processor, model, frame_bgr: np.ndarray) -> tuple[str, float
     best_label, best_conf = max(results, key=lambda x: x[1])
     return best_label, best_conf
 
+
 def _has_fire_colors(frame_bgr: np.ndarray, min_ratio: float = _MIN_FIRE_PIXEL_RATIO) -> bool:
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
@@ -71,6 +74,7 @@ def _has_fire_colors(frame_bgr: np.ndarray, min_ratio: float = _MIN_FIRE_PIXEL_R
     total = frame_bgr.shape[0] * frame_bgr.shape[1]
     return float(fire_mask.sum()) / total >= min_ratio
 
+
 @dataclass
 class FireEvent:
     frame_index: int
@@ -78,6 +82,7 @@ class FireEvent:
     event_type: str
     confidence: float
     box: list[int]
+
 
 @dataclass
 class ProcessingResult:
@@ -90,7 +95,9 @@ class ProcessingResult:
     smoke_detected: bool
     events: list[FireEvent] = field(default_factory=list)
 
+
 ProgressCallback = Callable[[int, int], None]
+
 
 class TemporalValidator:
     def __init__(self, window: int = 6, min_hits: int = 3):
@@ -110,6 +117,7 @@ class TemporalValidator:
         self._fire_hist.clear()
         self._smoke_hist.clear()
 
+
 def _draw_banner(frame: np.ndarray, width: int, confirmed_fire: bool, confirmed_smoke: bool) -> str:
     if confirmed_fire and confirmed_smoke:
         status_text = "ALARM: FIRE & SMOKE DETECTED"
@@ -126,6 +134,7 @@ def _draw_banner(frame: np.ndarray, width: int, confirmed_fire: bool, confirmed_
     cv2.rectangle(frame, (0, 0), (width, 42), bg_color, -1)
     cv2.putText(frame, status_text, (20, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
     return event_type
+
 
 def process_video(
     input_path: str,
@@ -198,6 +207,7 @@ def process_video(
         smoke_detected=smoke_detected_global, events=events,
     )
 
+
 def detect_fire_frame(
     frame: np.ndarray,
     model=None,
@@ -238,6 +248,7 @@ def detect_fire_frame(
 
     return frame, detections, confirmed_fire, confirmed_smoke
 
+
 def reencode_for_web(input_path: str, output_path: str) -> None:
     try:
         import imageio_ffmpeg
@@ -251,6 +262,7 @@ def reencode_for_web(input_path: str, output_path: str) -> None:
         output_path,
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:

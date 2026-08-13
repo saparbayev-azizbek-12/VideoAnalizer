@@ -18,7 +18,6 @@ from tkinter import filedialog, messagebox, ttk
 from multi_object_detector import config
 from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter
 
-
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PKG_DIR not in sys.path:
     sys.path.insert(0, os.path.dirname(_PKG_DIR))
@@ -77,8 +76,6 @@ def _analyze_frame_multi(
     ts = frame_idx / max(fps, 1.0)
     h_f, w_f = annotated.shape[:2]
 
-
-    # 1. Fire / Smoke
     if models_enabled.get("fire") and _fire_model is not None:
         try:
             ann, det_events, has_fire, has_smoke = fire_detector.detect_fire_frame(
@@ -95,7 +92,6 @@ def _analyze_frame_multi(
         except Exception:
             pass
 
-    # 2. PPE Detection
     if models_enabled.get("ppe") and _ppe_model is not None:
         try:
             draw_person_b = not models_enabled.get("fall", False)
@@ -115,7 +111,6 @@ def _analyze_frame_multi(
         except Exception:
             pass
 
-    # 3. Fall Detection
     if models_enabled.get("fall") and _fall_model is not None and _fall_pose is not None:
         try:
             annotated, fall_events, any_fall = fall_detector.process_fall_frame(
@@ -141,8 +136,6 @@ def _analyze_frame_multi(
                             cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
         except Exception as _e:
             print(f"[VideoUI] Fall frame error: {_e}")
-
-
 
     return annotated, events
 
@@ -194,13 +187,11 @@ class VideoAnalyzerApp(tk.Tk):
                         fg=fg or FG, bg=bg or BG2, **kw)
 
     def _build_ui(self):
-        # Top Bar
         top_bar = tk.Frame(self, bg=BG, pady=6)
         top_bar.pack(fill="x", padx=10)
         tk.Label(top_bar, text="🎬  Video Tahlil Tizimi", font=("Segoe UI", 15, "bold"),
                  fg=ACCENT, bg=BG).pack(side="left")
 
-        # Top Bar Download Button (Always 100% visible on top!)
         self._top_dl_btn = tk.Button(
             top_bar, text="💾  Tahlil qilingan videoni yuklab olish (MP4)",
             command=self._download_video,
@@ -232,7 +223,6 @@ class VideoAnalyzerApp(tk.Tk):
         panel = self._styled_frame(parent, bg=BG2, width=310)
         panel.pack_propagate(False)
 
-        # 1. Execution Mode
         self._section(panel, "🌐  Tahlil Rejimi")
         mode_f = self._styled_frame(panel)
         mode_f.pack(fill="x", padx=8, pady=(0, 2))
@@ -264,7 +254,6 @@ class VideoAnalyzerApp(tk.Tk):
 
         tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=8, pady=3)
 
-        # 2. File Picker
         self._section(panel, "📁  Video Yuklash")
         self._btn(panel, "📂  Video Tanlash", self._pick_video, color=ACCENT).pack(
             fill="x", padx=8, pady=(0, 2))
@@ -278,7 +267,6 @@ class VideoAnalyzerApp(tk.Tk):
 
         tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=8, pady=3)
 
-        # 3. Models
         self._section(panel, "🤖  Modellar")
         for model_id, info in MODEL_INFO.items():
             row = tk.Frame(panel, bg=BG2)
@@ -295,7 +283,6 @@ class VideoAnalyzerApp(tk.Tk):
 
         tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=8, pady=3)
 
-        # 4. Settings
         self._section(panel, "⚙️  Sozlamalar")
         cfg_f = self._styled_frame(panel)
         cfg_f.pack(fill="x", padx=8, pady=(0, 3))
@@ -316,7 +303,6 @@ class VideoAnalyzerApp(tk.Tk):
 
         tk.Frame(panel, bg=CARD, height=1).pack(fill="x", padx=8, pady=3)
 
-        # 5. Controls & Main Download
         self._section(panel, "▶  Boshqaruv & Yuklab Olish")
         ctrl_f = self._styled_frame(panel)
         ctrl_f.pack(fill="x", padx=8, pady=(0, 2))
@@ -328,7 +314,6 @@ class VideoAnalyzerApp(tk.Tk):
         self._stop_btn.pack(fill="x", pady=1)
         self._stop_btn.config(state="disabled")
 
-        # Progress bar
         self._progress_var = tk.DoubleVar(value=0)
         style = ttk.Style()
         style.theme_use("clam")
@@ -340,7 +325,6 @@ class VideoAnalyzerApp(tk.Tk):
         self._progress_lbl = self._label(panel, "Tayyor", fg=FG2, font=FONT_SMALL)
         self._progress_lbl.pack(padx=8, anchor="w")
 
-        # Main Download Button inside Left Panel
         self._dl_video_btn = tk.Button(
             panel, text="💾  Videoni Yuklab Olish (MP4)",
             command=self._download_video,
@@ -375,7 +359,6 @@ class VideoAnalyzerApp(tk.Tk):
         panel.rowconfigure(0, weight=3)
         panel.rowconfigure(1, weight=2)
 
-        # Preview Card
         preview_card = tk.Frame(panel, bg=CARD, bd=0)
         preview_card.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
 
@@ -391,7 +374,6 @@ class VideoAnalyzerApp(tk.Tk):
         self._canvas.pack(fill="both", expand=True, padx=4, pady=(0, 4))
         self._photo: Optional[ImageTk.PhotoImage] = None
 
-        # Events Card
         events_card = tk.Frame(panel, bg=CARD, bd=0)
         events_card.grid(row=1, column=0, sticky="nsew")
 
@@ -400,7 +382,6 @@ class VideoAnalyzerApp(tk.Tk):
         tk.Label(ehdr, text="📋  Aniqlangan Hodisalar", font=("Segoe UI", 10, "bold"),
                  fg=FG, bg=CARD).pack(side="left")
 
-        # Download button right inside table header too!
         self._table_dl_btn = tk.Button(
             ehdr, text="💾 Videoni yuklab olish", command=self._download_video,
             bg=GREEN, fg="#ffffff", font=("Segoe UI", 8, "bold"),
@@ -569,7 +550,6 @@ class VideoAnalyzerApp(tk.Tk):
         self._start_btn.config(state="normal")
         self._stop_btn.config(state="disabled")
 
-    # --- Server Mode ---
     def _run_server_analysis(self):
         server_url = self._server_url_var.get().strip().rstrip("/")
         self._ui_queue.put(("status", "🌐 Serverga video yuklanmoqda…"))
@@ -626,7 +606,6 @@ class VideoAnalyzerApp(tk.Tk):
                 tf = s_data.get("total_frames", 1)
                 ev_cnt = s_data.get("events_count", 0)
 
-                # Fetch preview frame
                 try:
                     prev_req = urllib.request.Request(f"{server_url}/api/video/preview/{job_id}")
                     with urllib.request.urlopen(prev_req, timeout=1.5) as p_resp:
@@ -640,7 +619,6 @@ class VideoAnalyzerApp(tk.Tk):
                 except Exception:
                     self._ui_queue.put(("progress", pct, cf, tf, None))
 
-                # Fetch new events
                 if ev_cnt > last_event_count:
                     try:
                         ev_req = urllib.request.Request(f"{server_url}/api/video/events/{job_id}")
@@ -674,7 +652,6 @@ class VideoAnalyzerApp(tk.Tk):
             except Exception:
                 time.sleep(0.5)
 
-    # --- Local Mode ---
     def _run_local_analysis(self):
         from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
 

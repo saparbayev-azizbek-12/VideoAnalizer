@@ -7,11 +7,12 @@ import urllib.parse
 from datetime import datetime
 from multi_object_detector import config
 
-
 _log_lock = threading.Lock()
+
 
 def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
 
 def _mask_source_credentials(source: str) -> str:
     try:
@@ -24,6 +25,7 @@ def _mask_source_credentials(source: str) -> str:
     except Exception:
         pass
     return source
+
 
 def diagnose_rtsp_connection(source: str) -> str:
     try:
@@ -50,6 +52,7 @@ def diagnose_rtsp_connection(source: str) -> str:
             return "Lokal kamera manbasi topilmadi yoki band qilingan"
     except Exception as e:
         return f"Diagnostika xatoligi: {e}"
+
 
 class CameraStreamLogger:
     def __init__(self, log_path: str | None = None):
@@ -160,5 +163,6 @@ class CameraStreamLogger:
             reason=err_msg,
             throttle_sec=5.0,
         )
+
 
 stream_logger = CameraStreamLogger()
