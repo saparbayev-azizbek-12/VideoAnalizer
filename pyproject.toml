@@ -26,6 +26,7 @@ dependencies = [
     "uvicorn[standard]==0.32.0",
     "onnxruntime>=1.17.0",
     "rfdetr",
+    "rtmlib>=0.0.16",
 ]
 
 [build-system]
