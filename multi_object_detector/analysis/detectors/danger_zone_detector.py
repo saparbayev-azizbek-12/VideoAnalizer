@@ -19,6 +19,7 @@ def get_model() -> Any:
     global _PERSON_MODEL
     if _PERSON_MODEL is None:
         try:
+            # pyrefly: ignore [missing-import]
             from rfdetr import RFDETRLarge
             _PERSON_MODEL = RFDETRLarge()
         except Exception as e:
@@ -63,21 +64,45 @@ class DangerZoneState:
         people_in_zone = int(in_zone_mask.sum())
         breach = people_in_zone > 0
 
+        # Xavfli hudud poligonini chizish
         annotated = self.zone_annotator.annotate(scene=frame)
+
         if draw_boxes and len(people) > 0:
-            if people.confidence is not None:
-                labels = [f"person {c:.2f}" for c in people.confidence]
-            else:
-                labels = ["person" for _ in range(len(people))]
-            annotated = self.box_annotator.annotate(scene=annotated, detections=people)
-            annotated = self.label_annotator.annotate(scene=annotated, detections=people, labels=labels)
+            # Har bir odam uchun alohida rang: zonada → qizil, tashqarida → yashil
+            for i in range(len(people)):
+                try:
+                    x1, y1, x2, y2 = map(int, people.xyxy[i])
+                    h_img, w_img = annotated.shape[:2]
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w_img, x2), min(h_img, y2)
+
+                    in_zone = bool(in_zone_mask[i]) if i < len(in_zone_mask) else False
+                    color = (0, 0, 220) if in_zone else (0, 200, 60)  # qizil / yashil (BGR)
+
+                    # Qalin kontur
+                    cv2.rectangle(annotated, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), (0, 0, 0), 2)
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+
+                    # Yorliq
+                    conf_val = float(people.confidence[i]) if people.confidence is not None else 1.0
+                    zone_tag = "⚠ ZONADA" if in_zone else "xavfsiz"
+                    label = f"person {conf_val:.2f} [{zone_tag}]"
+                    (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1)
+                    ly = max(y1 - 4, th + 6)
+                    cv2.rectangle(annotated, (x1, ly - th - 4), (x1 + tw + 4, ly + bl + 1), color, -1)
+                    cv2.putText(annotated, label, (x1 + 2, ly - 1),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
+                except Exception:
+                    continue
 
         if breach:
             width = frame.shape[1]
-            cv2.rectangle(annotated, (0, 0), (width, 50), (0, 0, 255), -1)
-            cv2.putText(annotated, f"DIQQAT! XAVFLI HUDUDDA {people_in_zone} ODAM BOR", (15, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.rectangle(annotated, (0, 0), (width, 50), (0, 0, 200), -1)
+            cv2.putText(annotated, f"DIQQAT! XAVFLI HUDUDDA {people_in_zone} ODAM BOR",
+                        (15, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
 
         return annotated, people_in_zone, breach
+
 
 def main():
     parser = argparse.ArgumentParser(description="Xavfli hududda odam aniqlash tizimi")

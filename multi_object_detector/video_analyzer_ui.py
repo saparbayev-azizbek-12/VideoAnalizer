@@ -131,6 +131,9 @@ def _analyze_frame_multi(
             persons = detections[person_mask]
             tracked_persons = _fall_tracker.update_with_detections(persons)
 
+            # Aniqlangan barcha odamlarni vizual ko'rsatish (yashil bbox + yorliq)
+            fall_detector.draw_person_detection(annotated, tracked_persons)
+
             if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
                 for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
                     track_id = int(track_id_t)
@@ -164,9 +167,12 @@ def _analyze_frame_multi(
                         kpt = kpts[0]
                         sc = scs[0]
 
-                        # Always draw RTMPose skeleton lines and coordinates on crop
-                        fall_detector.draw_pose_skeleton(crop, kpts, scs, kpt_thr=0.20, draw_coords=True)
-                        annotated[cy1:cy2, cx1:cx2] = crop
+                        # RTMPose skeleton FULL-FRAME koordinatalarida (crop offset bilan)
+                        fall_detector.draw_pose_skeleton_global(
+                            annotated, kpts, scs,
+                            offset_x=cx1, offset_y=cy1,
+                            kpt_thr=0.20, draw_coords=True
+                        )
 
                         if fall_detector.is_pose_reliable(sc):
                             l_sh = kpt[fall_detector.KEYPOINT_LEFT_SHOULDER]
@@ -206,12 +212,12 @@ def _analyze_frame_multi(
                             smoothed_angle = float(np.median(state.angle_history))
                             posture = fall_detector.classify_posture(smoothed_angle)
 
-                            # Draw torso line and center points on full frame
+                            # Tana o'qi (torso) FULL-FRAME da chizish
                             g_sh = (int(cx1 + sh_x), int(cy1 + sh_y))
                             g_hip = (int(cx1 + hip_x), int(cy1 + hip_y))
                             cv2.line(annotated, g_sh, g_hip, (0, 0, 255), 3, cv2.LINE_AA)
-                            cv2.circle(annotated, g_sh, 5, (0, 255, 255), -1, cv2.LINE_AA)
-                            cv2.circle(annotated, g_hip, 5, (255, 0, 255), -1, cv2.LINE_AA)
+                            cv2.circle(annotated, g_sh, 6, (0, 255, 255), -1, cv2.LINE_AA)
+                            cv2.circle(annotated, g_hip, 6, (255, 0, 255), -1, cv2.LINE_AA)
 
                     # Geometric Aspect-Ratio Fallback
                     if posture == "Unknown":
@@ -227,7 +233,7 @@ def _analyze_frame_multi(
 
                     state.posture_history.append(posture)
 
-                    # 5-frame window transition check (e.g., 2 standing + 3 falling, 1 falling + 4 lying, etc.)
+                    # 5-frame window transition check
                     is_transition_5f = fall_detector.check_5frame_transition(state.posture_history)
 
                     if posture in ("Falling", "Lying Down") or ar < 0.90:
@@ -253,31 +259,37 @@ def _analyze_frame_multi(
                         state.fall_detected = False
                         state.falled_count = 0
 
+                    # Holatga qarab rang va yorliq
                     if state.is_falled or state.fall_detected:
                         any_fall_detected = True
                         box_color = (0, 0, 255)
-                        lbl_text = f"ID{track_id}: FALLED ({smoothed_angle:.0f}deg) [x:{x1},y:{y1}]"
+                        lbl_text = f"ID{track_id}: FALLED ({smoothed_angle:.0f}deg)"
                     elif posture == "Falling":
                         box_color = (0, 140, 255)
-                        lbl_text = f"ID{track_id}: Falling ({smoothed_angle:.0f}deg) [x:{x1},y:{y1}]"
+                        lbl_text = f"ID{track_id}: Falling ({smoothed_angle:.0f}deg)"
                     elif posture == "Lying Down":
                         box_color = (0, 140, 255)
-                        lbl_text = f"ID{track_id}: Lying ({smoothed_angle:.0f}deg) [x:{x1},y:{y1}]"
+                        lbl_text = f"ID{track_id}: Lying ({smoothed_angle:.0f}deg)"
                     else:
                         box_color = (0, 200, 60)
-                        lbl_text = f"ID{track_id}: Standing ({smoothed_angle:.0f}deg) [x:{x1},y:{y1}]"
+                        lbl_text = f"ID{track_id}: Standing ({smoothed_angle:.0f}deg)"
 
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
+                    # Holatga mos ramka (draw_person_detection ustiga qo'shimcha)
+                    cv2.rectangle(annotated, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), (0, 0, 0), 2)
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2, cv2.LINE_AA)
                     (tw, th), bl = cv2.getTextSize(lbl_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
                     ty = max(th + 4, y1)
                     cv2.rectangle(annotated, (x1, ty - th - 6), (x1 + tw + 6, ty + bl + 2), box_color, -1)
-                    cv2.putText(annotated, lbl_text, (x1 + 3, ty - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+                    cv2.putText(annotated, lbl_text, (x1 + 3, ty - 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
 
             if any_fall_detected:
                 cv2.rectangle(annotated, (0, 0), (w_f, 42), (0, 0, 220), -1)
-                cv2.putText(annotated, "ALARM: FALL DETECTED (YIQILISH)", (20, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
+                cv2.putText(annotated, "ALARM: FALL DETECTED (YIQILISH)", (20, 28),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
         except Exception:
             pass
+
 
     return annotated, events
 

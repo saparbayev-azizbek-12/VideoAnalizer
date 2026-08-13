@@ -288,6 +288,88 @@ LIMB_COLORS = [
     (255, 255, 0),  # 4-6: R-Ear - R-Shoulder
 ]
 
+def draw_person_detection(
+    image: np.ndarray,
+    detections: Any,
+    conf_thr: float = 0.20,
+    in_zone_flags: Optional[Any] = None,
+) -> np.ndarray:
+    """
+    RF-DETR (yoki boshqa) model tomonidan aniqlangan odamni vizual ko'rsatadi.
+    - Agar detection mask (polygon) bo'lsa → polygon chizadi
+    - Agar 4-koordinatali bbox bo'lsa → to'rtburchak chizadi
+    - Har bir aniqlangan odam uchun confidence va track_id ni yorliqda ko'rsatadi
+    """
+    if detections is None or len(detections) == 0:
+        return image
+
+    for i in range(len(detections)):
+        try:
+            # Confidence
+            conf = float(detections.confidence[i]) if detections.confidence is not None else 1.0
+            if conf < conf_thr:
+                continue
+
+            # Rang: zonada bo'lsa qizil, aks holda yashil-ko'k
+            if in_zone_flags is not None and i < len(in_zone_flags) and in_zone_flags[i]:
+                base_color = (0, 0, 255)   # qizil – zonada
+            else:
+                base_color = (0, 200, 60)  # yashil – xavfsiz
+
+            # Tracker ID (agar mavjud bo'lsa)
+            tid = None
+            if hasattr(detections, "tracker_id") and detections.tracker_id is not None:
+                try:
+                    tid = int(detections.tracker_id[i])
+                except Exception:
+                    pass
+
+            # Mask mavjudligi tekshiriladi (polygon ko'rinishi)
+            has_mask = False
+            if hasattr(detections, "mask") and detections.mask is not None:
+                try:
+                    mask = detections.mask[i]
+                    if mask is not None and len(mask) >= 3:
+                        pts = np.array(mask, dtype=np.int32).reshape((-1, 1, 2))
+                        cv2.polylines(image, [pts], isClosed=True, color=base_color, thickness=2, lineType=cv2.LINE_AA)
+                        overlay = image.copy()
+                        cv2.fillPoly(overlay, [pts], color=base_color)
+                        cv2.addWeighted(overlay, 0.18, image, 0.82, 0, image)
+                        cx, cy = int(np.mean(mask[:, 0])), int(np.mean(mask[:, 1]))
+                        has_mask = True
+                except Exception:
+                    pass
+
+            # Bbox (to'rtburchak) chizish
+            if not has_mask:
+                x1, y1, x2, y2 = map(int, detections.xyxy[i])
+                # Chegaralarni frame ichida saqlash
+                h_img, w_img = image.shape[:2]
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w_img, x2), min(h_img, y2)
+                # Tashqi qalin kontur (contrast uchun)
+                cv2.rectangle(image, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), (0, 0, 0), 2)
+                cv2.rectangle(image, (x1, y1), (x2, y2), base_color, 2, cv2.LINE_AA)
+                cx, cy = (x1 + x2) // 2, y1
+
+            # Yorliq
+            label_parts = []
+            if tid is not None:
+                label_parts.append(f"ID{tid}")
+            label_parts.append(f"person {conf:.2f}")
+            label = " ".join(label_parts)
+
+            (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)
+            lx = cx - tw // 2
+            ly = max(th + 4, cy - 4)
+            cv2.rectangle(image, (lx - 2, ly - th - 4), (lx + tw + 2, ly + bl + 1), base_color, -1)
+            cv2.putText(image, label, (lx, ly - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
+
+        except Exception:
+            continue
+    return image
+
+
 def draw_pose_skeleton(
     image: np.ndarray,
     keypoints: np.ndarray,
@@ -296,7 +378,8 @@ def draw_pose_skeleton(
     draw_coords: bool = True,
 ) -> np.ndarray:
     """
-    Draws COCO-17 skeleton lines, keypoint circles, and coordinates on the given image.
+    COCO-17 skelet chiziqlar, nuqtalar va koordinatalarni berilgan image (crop yoki frame) ustiga chizadi.
+    Koordinatalar image-ga nisbatan (crop ichida yoki to'liq frame da).
     """
     if keypoints is None or scores is None or len(keypoints) == 0:
         return image
@@ -304,7 +387,7 @@ def draw_pose_skeleton(
     kpts = keypoints[0] if keypoints.ndim == 3 else keypoints
     scs = scores[0] if scores.ndim == 2 else scores
 
-    # Draw skeleton connections
+    # Skelet chiziqlari
     for idx, (p1_idx, p2_idx) in enumerate(SKELETON_CONNECTIONS):
         if p1_idx < len(kpts) and p2_idx < len(kpts):
             if scs[p1_idx] >= kpt_thr and scs[p2_idx] >= kpt_thr:
@@ -313,19 +396,64 @@ def draw_pose_skeleton(
                 color = LIMB_COLORS[idx] if idx < len(LIMB_COLORS) else (0, 255, 255)
                 cv2.line(image, pt1, pt2, color, 2, cv2.LINE_AA)
 
-    # Draw joint points and coordinates
+    # Bo'g'in nuqtalar va koordinatalar
     for idx, (x, y) in enumerate(kpts):
         if scs[idx] >= kpt_thr:
             px, py = int(round(x)), int(round(y))
             color = KEYPOINT_COLORS[idx] if idx < len(KEYPOINT_COLORS) else (0, 255, 0)
             cv2.circle(image, (px, py), 4, color, -1, cv2.LINE_AA)
             cv2.circle(image, (px, py), 5, (255, 255, 255), 1, cv2.LINE_AA)
-
-            if draw_coords and idx in (KEYPOINT_LEFT_SHOULDER, KEYPOINT_RIGHT_SHOULDER, KEYPOINT_LEFT_HIP, KEYPOINT_RIGHT_HIP):
+            if draw_coords and idx in (KEYPOINT_LEFT_SHOULDER, KEYPOINT_RIGHT_SHOULDER,
+                                       KEYPOINT_LEFT_HIP, KEYPOINT_RIGHT_HIP):
                 coord_text = f"({px},{py})"
-                cv2.putText(image, coord_text, (px + 4, py - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
-
+                cv2.putText(image, coord_text, (px + 4, py - 4), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.35, (255, 255, 255), 1, cv2.LINE_AA)
     return image
+
+
+def draw_pose_skeleton_global(
+    frame: np.ndarray,
+    keypoints: np.ndarray,
+    scores: np.ndarray,
+    offset_x: int,
+    offset_y: int,
+    kpt_thr: float = 0.20,
+    draw_coords: bool = True,
+) -> np.ndarray:
+    """
+    RTMPose keypoint-larini FULL-FRAME koordinatalarida chizadi.
+    Crop ichidagi nuqtalarga (offset_x, offset_y) ni qo'shib to'liq kadrga chiziladi.
+    """
+    if keypoints is None or scores is None or len(keypoints) == 0:
+        return frame
+
+    kpts = keypoints[0] if keypoints.ndim == 3 else keypoints
+    scs = scores[0] if scores.ndim == 2 else scores
+
+    # Skelet chiziqlari
+    for idx, (p1_idx, p2_idx) in enumerate(SKELETON_CONNECTIONS):
+        if p1_idx < len(kpts) and p2_idx < len(kpts):
+            if scs[p1_idx] >= kpt_thr and scs[p2_idx] >= kpt_thr:
+                pt1 = (int(round(kpts[p1_idx][0])) + offset_x,
+                       int(round(kpts[p1_idx][1])) + offset_y)
+                pt2 = (int(round(kpts[p2_idx][0])) + offset_x,
+                       int(round(kpts[p2_idx][1])) + offset_y)
+                color = LIMB_COLORS[idx] if idx < len(LIMB_COLORS) else (0, 255, 255)
+                cv2.line(frame, pt1, pt2, color, 2, cv2.LINE_AA)
+
+    # Bo'g'in nuqtalar va koordinatalar
+    for idx, (x, y) in enumerate(kpts):
+        if scs[idx] >= kpt_thr:
+            px = int(round(x)) + offset_x
+            py = int(round(y)) + offset_y
+            color = KEYPOINT_COLORS[idx] if idx < len(KEYPOINT_COLORS) else (0, 255, 0)
+            cv2.circle(frame, (px, py), 4, color, -1, cv2.LINE_AA)
+            cv2.circle(frame, (px, py), 5, (255, 255, 255), 1, cv2.LINE_AA)
+            if draw_coords:
+                coord_text = f"({px},{py})"
+                cv2.putText(frame, coord_text, (px + 4, py - 4), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.32, (220, 220, 220), 1, cv2.LINE_AA)
+    return frame
 
 class RTMPoseEstimator:
     """
@@ -453,6 +581,9 @@ def process_video(
         persons = detections[person_mask]
         tracked_persons = tracker.update_with_detections(persons)
 
+        # Aniqlangan barcha odamlarni vizual ko'rsatish (bbox yoki mask polygon)
+        draw_person_detection(frame, tracked_persons)
+
         if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
             for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
                 track_id = int(track_id_t)
@@ -466,7 +597,6 @@ def process_video(
                 bbox_w = x2 - x1
                 bbox_h = y2 - y1
                 if not is_valid_person_crop(bbox_w, bbox_h):
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 1)
                     continue
 
                 person_bbox = frame[y1:y2, x1:x2].copy()
@@ -477,9 +607,8 @@ def process_video(
                     kpt = kpts[0]
                     sc = scs[0]
 
-                    # Always draw RTMPose skeleton lines & coordinates on person crop
-                    draw_pose_skeleton(person_bbox, kpts, scs, kpt_thr=0.20, draw_coords=True)
-                    frame[y1:y2, x1:x2] = person_bbox
+                    # RTMPose barcha nuqtalar va chiziqlari FULL-FRAME da chiziladi
+                    draw_pose_skeleton_global(frame, kpts, scs, offset_x=x1, offset_y=y1, kpt_thr=0.20, draw_coords=True)
 
                     if is_pose_reliable(sc):
                         l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
@@ -562,9 +691,10 @@ def process_video(
 
                         if state.fall_detected:
                             any_fall_this_frame = True
-
-                box_color = (0, 0, 255) if (posture == "Falling" and state.fall_detected) else (255, 0, 0)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+                            # Yiqilish aniqlanganda bbox ustiga qizil ramka
+                            cv2.rectangle(frame, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 255), 3, cv2.LINE_AA)
+                            cv2.putText(frame, f"FALL! ID{track_id}", (x1, max(y1 - 30, 20)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
 
         stale_ids = [tid for tid, st in track_states.items() if frame_idx - st.last_seen_frame > TRACK_TTL_FRAMES]
         for tid in stale_ids:
@@ -613,6 +743,9 @@ def process_fall_frame(
     persons = detections[person_mask]
     tracked_persons = tracker.update_with_detections(persons)
 
+    # Aniqlangan barcha odamlarni vizual ko'rsatish (bbox yoki mask polygon)
+    draw_person_detection(frame, tracked_persons)
+
     if len(tracked_persons) > 0 and tracked_persons.tracker_id is not None:
         for bbox, track_id_t in zip(tracked_persons.xyxy, tracked_persons.tracker_id):
             track_id = int(track_id_t)
@@ -626,7 +759,6 @@ def process_fall_frame(
             bbox_w = x2 - x1
             bbox_h = y2 - y1
             if not is_valid_person_crop(bbox_w, bbox_h):
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 1)
                 continue
 
             person_bbox = frame[y1:y2, x1:x2].copy()
@@ -637,9 +769,8 @@ def process_fall_frame(
                 kpt = kpts[0]
                 sc = scs[0]
 
-                # Always draw RTMPose skeleton lines & coordinates on person crop
-                draw_pose_skeleton(person_bbox, kpts, scs, kpt_thr=0.20, draw_coords=True)
-                frame[y1:y2, x1:x2] = person_bbox
+                # RTMPose barcha nuqtalar va chiziqlari FULL-FRAME da chiziladi
+                draw_pose_skeleton_global(frame, kpts, scs, offset_x=x1, offset_y=y1, kpt_thr=0.20, draw_coords=True)
 
                 if is_pose_reliable(sc):
                     l_sh = kpt[KEYPOINT_LEFT_SHOULDER]
@@ -722,9 +853,10 @@ def process_fall_frame(
 
                     if state.fall_detected:
                         any_fall_this_frame = True
-
-            box_color = (0, 0, 255) if (posture == "Falling" and state.fall_detected) else (255, 0, 0)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+                        # Yiqilish aniqlanganda bbox ustiga qizil ramka
+                        cv2.rectangle(frame, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 255), 3, cv2.LINE_AA)
+                        cv2.putText(frame, f"FALL! ID{track_id}", (x1, max(y1 - 30, 20)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
 
     stale_ids = [tid for tid, st in track_states.items() if frame_idx - st.last_seen_frame > TRACK_TTL_FRAMES]
     for tid in stale_ids:
