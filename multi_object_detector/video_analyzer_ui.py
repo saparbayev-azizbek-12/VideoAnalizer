@@ -69,11 +69,15 @@ def _analyze_frame_multi(
     _fall_pose=None,
     _fall_track_states=None,
 ) -> tuple[np.ndarray, list[dict]]:
+    from multi_object_detector.analysis.frame_filter import is_frame_valid
+    if not is_frame_valid(frame):
+        return frame, []
     from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
     annotated = frame.copy()
     events = []
     ts = frame_idx / max(fps, 1.0)
     h_f, w_f = annotated.shape[:2]
+
 
     # 1. Fire / Smoke
     if models_enabled.get("fire") and _fire_model is not None:
