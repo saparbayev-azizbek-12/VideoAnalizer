@@ -1,12 +1,8 @@
 from __future__ import annotations
 import sys
 import argparse
-import tkinter as tk
 
 from multi_object_detector.core import config
-from multi_object_detector.ui.live_monitor_ui import MonitoringApp, CameraPopout, ZoneEditorWindow
-
-__all__ = ["MonitoringApp", "CameraPopout", "ZoneEditorWindow", "main"]
 
 
 def main() -> None:
@@ -35,6 +31,11 @@ def main() -> None:
         print(f"🎬 Video Server ishga tushmoqda: http://{host}:{port}")
         uvicorn.run("multi_object_detector.api.video_server:app", host=host, port=port)
     else:
+        try:
+            import tkinter as tk
+            from multi_object_detector.ui.live_monitor_ui import MonitoringApp
+        except ImportError as e:
+            sys.exit(f"GUI interfeysi uchun Tkinter talab qilinadi: {e}\nServerni ishga tushirish uchun: python run_server.py yoki python main.py --server")
         root = tk.Tk()
         MonitoringApp(root)
         root.mainloop()
