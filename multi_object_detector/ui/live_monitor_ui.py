@@ -26,6 +26,7 @@ class CameraPopout(tk.Toplevel):
         self._frame_lock = threading.Lock()
         self._latest_frame = None
         self._photo_ref = None
+        self._session = requests.Session()
         self.label = tk.Label(self, bg="#000000")
         self.label.pack(fill=tk.BOTH, expand=True)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -34,9 +35,10 @@ class CameraPopout(tk.Toplevel):
 
     def _fetch_loop(self) -> None:
         while self._running:
+            t0 = time.time()
             try:
                 url = self.app.server_url.get().rstrip("/")
-                res = requests.get(f"{url}/api/cameras/{self.cam_id}/preview", timeout=config.API_TIMEOUT)
+                res = self._session.get(f"{url}/api/cameras/{self.cam_id}/preview", timeout=config.API_TIMEOUT)
                 if res.status_code == 200 and res.content:
                     frame = cv2.imdecode(np.frombuffer(res.content, dtype=np.uint8), cv2.IMREAD_COLOR)
                     if frame is not None:
@@ -44,7 +46,9 @@ class CameraPopout(tk.Toplevel):
                             self._latest_frame = frame
             except Exception:
                 pass
-            time.sleep(config.POPOUT_UPDATE_MS / 1000)
+            elapsed = time.time() - t0
+            target = config.POPOUT_UPDATE_MS / 1000
+            time.sleep(max(0.002, target - elapsed))
 
     def _refresh(self) -> None:
         if not self._running:
@@ -225,6 +229,7 @@ class MonitoringApp:
         self.camera_cache: dict[str, dict] = {}
         self.camera_order: list[str] = []
         self.popouts: dict[str, CameraPopout] = {}
+        self._session = requests.Session()
 
         self._frame_lock = threading.Lock()
         self._latest_frame = None
@@ -632,6 +637,7 @@ class MonitoringApp:
                 time.sleep(0.5)
                 continue
 
+            t0 = time.time()
             interval = config.GRID_UPDATE_MS / 1000
             try:
                 url = self.server_url.get().rstrip("/")
@@ -642,7 +648,7 @@ class MonitoringApp:
                     endpoint = f"{url}/api/cameras_grid_preview"
                     interval = config.GRID_UPDATE_MS / 1000
 
-                res = requests.get(endpoint, timeout=config.API_TIMEOUT)
+                res = self._session.get(endpoint, timeout=config.API_TIMEOUT)
                 if res.status_code == 200 and res.content:
                     frame = cv2.imdecode(np.frombuffer(res.content, dtype=np.uint8), cv2.IMREAD_COLOR)
                     if frame is not None:
@@ -650,7 +656,8 @@ class MonitoringApp:
                             self._latest_frame = frame
             except Exception:
                 pass
-            time.sleep(interval)
+            elapsed = time.time() - t0
+            time.sleep(max(0.002, interval - elapsed))
 
     def update_display(self) -> None:
         with self._frame_lock:

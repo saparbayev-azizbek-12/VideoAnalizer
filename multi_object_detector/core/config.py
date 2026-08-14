@@ -38,7 +38,7 @@ RTMPOSE_BACKEND = os.getenv("RTMPOSE_BACKEND", "onnxruntime")
 RTMPOSE_DEVICE = os.getenv("RTMPOSE_DEVICE", "cpu")
 RTMPOSE_MODEL_PATH = os.getenv("RTMPOSE_MODEL_PATH", "")
 
-ANALYSIS_EVERY_N_FRAMES = 1
+ANALYSIS_EVERY_N_FRAMES = int(os.getenv("ANALYSIS_EVERY_N_FRAMES", "3"))
 
 MODEL_IDS = ("fire", "fall", "danger_zone", "ppe")
 
@@ -60,17 +60,17 @@ CAMERA_RECONNECT_DELAY_SEC = 2.0
 
 APP_TITLE = "AI Video Monitoring - Ko'p Kamera / Ko'p Model Tizimi"
 
-GUI_UPDATE_MS = 120
-GRID_UPDATE_MS = 350
+GUI_UPDATE_MS = 33
+GRID_UPDATE_MS = 50
 STATUS_POLL_MS = 2000
-POPOUT_UPDATE_MS = 150
+POPOUT_UPDATE_MS = 33
 
 GRID_TILE_W, GRID_TILE_H = 360, 210
 
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
 DEFAULT_SERVER_URL = os.getenv("DEFAULT_SERVER_URL", "http://localhost:8000")
-DEFAULT_CAMERA_SOURCE = os.getenv("DEFAULT_CAMERA_SOURCE", "rtsp://user:pass@192.168.1.10:554/Streaming/Channels/101")
+DEFAULT_CAMERA_SOURCE = os.getenv("DEFAULT_CAMERA_SOURCE", "rtsp://rtsp:Qazwsx12@10.41.120.60:554/Streaming/Channels/102")
 
 API_TIMEOUT = 8
 

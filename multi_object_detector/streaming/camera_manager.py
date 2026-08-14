@@ -17,7 +17,7 @@ from multi_object_detector.core.stream_logger import stream_logger
 from multi_object_detector.detectors import manager as models_manager, frame_filter
 from multi_object_detector.detectors import fall_detector, danger_zone_detector, fire_detector
 
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|buffer_size;1024000|max_delay;500000|stimeout;5000000"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000"
 
 
 @dataclass
@@ -28,6 +28,20 @@ class CameraEvent:
     extra: dict = field(default_factory=dict)
 
 
+@dataclass
+class ActiveOverlay:
+    zone_breach: bool = False
+    zone_people_count: int = 0
+    fire_events: list[dict] = field(default_factory=list)
+    has_fire: bool = False
+    has_smoke: bool = False
+    fall_events: list[dict] = field(default_factory=list)
+    any_fall: bool = False
+    ppe_violations: list[dict] = field(default_factory=list)
+    has_ppe_violation: bool = False
+    ts: float = 0.0
+
+
 class CameraWorker:
     def __init__(self, cam_id: str, name: str, source: str):
         self.id = cam_id
@@ -36,6 +50,7 @@ class CameraWorker:
         self._lock = threading.Lock()
         self._raw_frame: Optional[np.ndarray] = None
         self._annotated_frame: Optional[np.ndarray] = None
+        self._overlay: ActiveOverlay = ActiveOverlay()
         self._connected = False
         self._running = False
         self._capture_thread: Optional[threading.Thread] = None
@@ -45,7 +60,8 @@ class CameraWorker:
         self._stream_filter = frame_filter.StreamCorruptionFilter(camera_id=cam_id)
         self.events: deque = deque(maxlen=300)
         self.frame_idx = 0
-        self.fps_estimate = 20.0
+        self.captured_frame_count = 0
+        self.fps_estimate = 25.0
         self._last_frame_time: Optional[float] = None
         self._fall_tracker = sv.ByteTrack()
         self._fall_pose: Optional[fall_detector.RTMPoseEstimator] = None
@@ -82,11 +98,112 @@ class CameraWorker:
 
     def get_annotated_frame(self) -> Optional[np.ndarray]:
         with self._lock:
-            if self._annotated_frame is not None:
-                return self._annotated_frame.copy()
-            if self._raw_frame is not None:
-                return self._raw_frame.copy()
-            return None
+            if self._raw_frame is None:
+                return None
+            frame = self._raw_frame.copy()
+            overlay = self._overlay
+        return self._render_overlay(frame, overlay)
+
+    def _render_overlay(self, frame: np.ndarray, overlay: ActiveOverlay) -> np.ndarray:
+        h, w = frame.shape[:2]
+        with self._zone_lock:
+            poly = self._zone_polygon
+
+        # 1. Danger zone polygon chizish
+        if poly is not None and len(poly) >= 3:
+            cv2.polylines(frame, [poly], isClosed=True, color=(0, 0, 220), thickness=2, lineType=cv2.LINE_AA)
+            for pt in poly:
+                cv2.circle(frame, (int(pt[0]), int(pt[1])), 4, (0, 0, 255), -1)
+
+        now = time.time()
+        # Deteksiya natijalari 1.5 soniya davomida ekranda silliq saqlanib turadi
+        is_fresh = (now - overlay.ts) < 1.5
+
+        if is_fresh:
+            banner_y = 0
+
+            # 2. Xavfli hudud buzilishi
+            if overlay.zone_breach:
+                cv2.rectangle(frame, (0, banner_y), (w, banner_y + 36), (0, 0, 200), -1)
+                cv2.putText(
+                    frame,
+                    f"DIQQAT! XAVFLI HUDUDDA {overlay.zone_people_count} ODAM BOR",
+                    (15, banner_y + 25),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                banner_y += 38
+
+            # 3. Yong'in / Tutun
+            if overlay.fire_events or overlay.has_fire or overlay.has_smoke:
+                cv2.rectangle(frame, (0, banner_y), (w, banner_y + 36), (0, 69, 255), -1)
+                cv2.putText(
+                    frame,
+                    "DIQQAT! YONG'IN / TUTUN ANIQLANDI",
+                    (15, banner_y + 25),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                banner_y += 38
+                for ev in overlay.fire_events:
+                    box = ev.get("box")
+                    if box:
+                        x1, y1, x2, y2 = map(int, box)
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 69, 255), 2, cv2.LINE_AA)
+                        lbl = f"{ev.get('type', 'Yongin')} {ev.get('confidence', 0)*100:.0f}%"
+                        cv2.putText(frame, lbl, (x1, max(15, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 69, 255), 2)
+
+            # 4. Yiqilish holati
+            if overlay.fall_events or overlay.any_fall:
+                cv2.rectangle(frame, (0, banner_y), (w, banner_y + 36), (0, 0, 220), -1)
+                cv2.putText(
+                    frame,
+                    "DIQQAT! YIQILISH HOLATI ANIQLANDI",
+                    (15, banner_y + 25),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                banner_y += 38
+                for ev in overlay.fall_events:
+                    tid = ev.get("track_id", "")
+                    cv2.putText(
+                        frame,
+                        f"YIQILISH ID {tid}",
+                        (w - 200, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 0, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
+
+            # 5. PPE / Maxsus kiyim qoidabuzarligi
+            if overlay.ppe_violations:
+                for viol in overlay.ppe_violations:
+                    box = viol.get("box")
+                    missing = viol.get("missing", [])
+                    if box:
+                        x1, y1, x2, y2 = map(int, box)
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 220), 2, cv2.LINE_AA)
+                        missing_str = ", ".join(
+                            "Kask" if m == "Safety Helmet" else "Jilet"
+                            for m in missing
+                        )
+                        lbl = f"PPE yo'q: {missing_str}"
+                        (tw, th), bl = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+                        cv2.rectangle(frame, (x1, max(0, y1 - th - 6)), (x1 + tw + 6, max(0, y1)), (0, 0, 220), -1)
+                        cv2.putText(frame, lbl, (x1 + 3, max(0, y1) - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+        return frame
 
     def get_recent_events(self, limit: int = 50) -> list[dict]:
         with self._lock:
@@ -187,12 +304,14 @@ class CameraWorker:
 
             consecutive_read_fails = 0
             self._update_fps_estimate()
+            self.captured_frame_count += 1
 
             with self._lock:
                 self._connected = True
                 self._last_error = None
                 self._raw_frame = frame
-                self._new_frame_event.set()
+                if self.captured_frame_count % max(1, config.ANALYSIS_EVERY_N_FRAMES) == 0:
+                    self._new_frame_event.set()
 
             if self._is_file_source:
                 time.sleep(1.0 / max(1.0, self.fps_estimate))
@@ -289,13 +408,17 @@ class CameraWorker:
     def _analyze(self, frame: np.ndarray) -> np.ndarray:
         if not frame_filter.is_frame_valid(frame):
             return frame
-        out = frame
+        out = frame.copy()
+        overlay = ActiveOverlay(ts=time.time())
 
         if models_manager.is_enabled("fire"):
             try:
-                out, fire_events, _has_fire, _has_smoke = models_manager.analyze_fire(
+                out, fire_events, has_fire, has_smoke = models_manager.analyze_fire(
                     out, validator=self._fire_validator
                 )
+                overlay.fire_events = fire_events
+                overlay.has_fire = has_fire
+                overlay.has_smoke = has_smoke
                 for ev in fire_events:
                     snap = self._save_dataset_snapshot("fire", out, ev)
                     extra = dict(box=ev["box"], confidence=ev["confidence"], type=ev["type"])
@@ -310,7 +433,7 @@ class CameraWorker:
                 if self._fall_pose is None:
                     self._fall_pose = fall_detector.create_pose_instance()
 
-                out, fall_events, _any_fall = models_manager.analyze_fall(
+                out, fall_events, any_fall = models_manager.analyze_fall(
                     frame=out,
                     frame_idx=self.frame_idx,
                     fps=max(1, int(round(self.fps_estimate))),
@@ -318,6 +441,8 @@ class CameraWorker:
                     track_states=self._fall_track_states,
                     tracker=self._fall_tracker,
                 )
+                overlay.fall_events = fall_events
+                overlay.any_fall = any_fall
                 for ev in fall_events:
                     snap = self._save_dataset_snapshot("fall", out, ev)
                     extra = dict(track_id=ev["track_id"])
@@ -333,6 +458,8 @@ class CameraWorker:
                     zone_state = self._zone_state
                 if zone_state is not None:
                     out, people_in_zone, breach = models_manager.analyze_danger_zone(zone_state, out)
+                    overlay.zone_breach = breach
+                    overlay.zone_people_count = people_in_zone
                     if breach:
                         snap = self._save_dataset_snapshot("danger_zone", out, {"people_in_zone": people_in_zone})
                         extra = dict(people_in_zone=people_in_zone)
@@ -345,6 +472,8 @@ class CameraWorker:
         if models_manager.is_enabled("ppe"):
             try:
                 out, ppe_violations, has_ppe_violation = models_manager.analyze_ppe(out)
+                overlay.ppe_violations = ppe_violations
+                overlay.has_ppe_violation = has_ppe_violation
                 if has_ppe_violation:
                     snap = self._save_dataset_snapshot("ppe", out, {"violation_count": len(ppe_violations)})
                     for i, viol in enumerate(ppe_violations):
@@ -363,6 +492,10 @@ class CameraWorker:
                         self._log_event("ppe", f"PPE yo'q: {missing_str}", **extra)
             except Exception as e:
                 sys_logger.error("CameraWorker", f"[{self.name}] PPE xatoligi: {e}", exc=e)
+
+        with self._lock:
+            self._overlay = overlay
+            self._annotated_frame = out
 
         return out
 
