@@ -98,11 +98,16 @@ class CameraWorker:
 
     def get_annotated_frame(self) -> Optional[np.ndarray]:
         with self._lock:
-            if self._raw_frame is None:
-                return None
-            frame = self._raw_frame.copy()
-            overlay = self._overlay
-        return self._render_overlay(frame, overlay)
+            if self._annotated_frame is not None:
+                return self._annotated_frame.copy()
+            if self._raw_frame is not None:
+                frame = self._raw_frame.copy()
+                with self._zone_lock:
+                    poly = self._zone_polygon
+                if poly is not None and len(poly) >= 3:
+                    cv2.polylines(frame, [poly], isClosed=True, color=(0, 0, 220), thickness=2, lineType=cv2.LINE_AA)
+                return frame
+            return None
 
     def _render_overlay(self, frame: np.ndarray, overlay: ActiveOverlay) -> np.ndarray:
         h, w = frame.shape[:2]

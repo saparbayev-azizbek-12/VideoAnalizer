@@ -38,7 +38,7 @@ RTMPOSE_BACKEND = os.getenv("RTMPOSE_BACKEND", "onnxruntime")
 RTMPOSE_DEVICE = os.getenv("RTMPOSE_DEVICE", "cpu")
 RTMPOSE_MODEL_PATH = os.getenv("RTMPOSE_MODEL_PATH", "")
 
-ANALYSIS_EVERY_N_FRAMES = int(os.getenv("ANALYSIS_EVERY_N_FRAMES", "3"))
+ANALYSIS_EVERY_N_FRAMES = int(os.getenv("ANALYSIS_EVERY_N_FRAMES", "1"))
 
 MODEL_IDS = ("fire", "fall", "danger_zone", "ppe")
 

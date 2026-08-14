@@ -46,7 +46,7 @@ class CameraPopout(tk.Toplevel):
             else:
                 try:
                     url = self.app.server_url.get().rstrip("/")
-                    res = self._session.get(f"{url}/api/cameras/{self.cam_id}/preview", timeout=config.API_TIMEOUT)
+                    res = self._session.get(f"{url}/api/cameras/{self.cam_id}/preview?max_w=960&max_h=540", timeout=config.API_TIMEOUT)
                     if res.status_code == 200 and res.content:
                         frame = cv2.imdecode(np.frombuffer(res.content, dtype=np.uint8), cv2.IMREAD_COLOR)
                 except Exception:
@@ -774,7 +774,7 @@ class MonitoringApp:
             try:
                 url = self.server_url.get().rstrip("/")
                 if self.view_mode == "single" and self.selected_camera_id:
-                    endpoint = f"{url}/api/cameras/{self.selected_camera_id}/preview"
+                    endpoint = f"{url}/api/cameras/{self.selected_camera_id}/preview?max_w=960&max_h=540"
                     interval = config.GUI_UPDATE_MS / 1000
                 else:
                     endpoint = f"{url}/api/cameras_grid_preview"

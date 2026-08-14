@@ -231,15 +231,15 @@ def _placeholder_tile(w: int, h: int, text: str) -> np.ndarray:
     return tile
 
 
-def _encode_jpeg(frame: np.ndarray) -> bytes:
-    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+def _encode_jpeg(frame: np.ndarray, quality: int = 75) -> bytes:
+    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     if not ok:
         raise HTTPException(status_code=500, detail="Kadr kodlanmadi")
     return buf.tobytes()
 
 
 @app.get("/api/cameras/{cam_id}/preview")
-async def camera_preview(cam_id: str, raw: int = 0):
+async def camera_preview(cam_id: str, raw: int = 0, max_w: int = 960, max_h: int = 540):
     cam = camera_manager.get_camera(cam_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Kamera topilmadi")
@@ -247,8 +247,14 @@ async def camera_preview(cam_id: str, raw: int = 0):
     frame = cam.get_raw_frame() if raw else cam.get_annotated_frame()
     if frame is None:
         frame = _placeholder_tile(640, 360, f"{cam.name}: ulanmoqda...")
+    else:
+        h, w = frame.shape[:2]
+        if max_w > 0 and max_h > 0 and (w > max_w or h > max_h):
+            scale = min(max_w / w, max_h / h)
+            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-    return Response(content=_encode_jpeg(frame), media_type="image/jpeg")
+    return Response(content=_encode_jpeg(frame, quality=72), media_type="image/jpeg")
 
 
 @app.get("/api/cameras_grid_preview")
