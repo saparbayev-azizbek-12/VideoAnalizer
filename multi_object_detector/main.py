@@ -31,6 +31,27 @@ def main() -> None:
         print(f"🎬 Video Server ishga tushmoqda: http://{host}:{port}")
         uvicorn.run("multi_object_detector.api.video_server:app", host=host, port=port)
     else:
+        import threading
+        from multi_object_detector.detectors import manager as models_manager
+        threading.Thread(target=models_manager.preload_all, daemon=True, name="bg-preload").start()
+
+        try:
+            import uvicorn
+            host = args.host or config.SERVER_HOST
+            port = args.port or config.SERVER_PORT
+
+            def _run_bg_server():
+                try:
+                    cfg = uvicorn.Config("multi_object_detector.api.live_server:app", host=host, port=port, log_level="warning")
+                    server = uvicorn.Server(cfg)
+                    server.run()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_run_bg_server, daemon=True, name="bg-api-server").start()
+        except Exception:
+            pass
+
         try:
             import tkinter as tk
             from multi_object_detector.ui.live_monitor_ui import MonitoringApp

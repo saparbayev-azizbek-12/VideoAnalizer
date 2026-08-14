@@ -287,22 +287,16 @@ class CameraWorker:
                     time.sleep(0.02)
                     continue
 
-                consecutive_read_fails += 1
-                if consecutive_read_fails < 30:
-                    time.sleep(0.02)
-                    continue
-
                 drop_err = stream_logger.log_stream_drop(self.id, self.name, self.source)
                 with self._lock:
                     self._connected = False
                     self._last_error = drop_err
-                cap.release()
+                if cap is not None:
+                    cap.release()
                 cap = None
-                consecutive_read_fails = 0
                 time.sleep(config.CAMERA_RECONNECT_DELAY_SEC)
                 continue
 
-            consecutive_read_fails = 0
             self._update_fps_estimate()
             self.captured_frame_count += 1
 

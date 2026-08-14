@@ -9,6 +9,8 @@ from PIL import Image, ImageTk
 from tkinter import messagebox, filedialog
 
 from multi_object_detector.core import config
+from multi_object_detector.streaming import camera_manager
+from multi_object_detector.detectors import manager as models_manager
 
 MODEL_ICONS = {"fire": "🔥", "fall": "🚨", "danger_zone": "⛔", "ppe": "🦺"}
 
@@ -36,19 +38,27 @@ class CameraPopout(tk.Toplevel):
     def _fetch_loop(self) -> None:
         while self._running:
             t0 = time.time()
-            try:
-                url = self.app.server_url.get().rstrip("/")
-                res = self._session.get(f"{url}/api/cameras/{self.cam_id}/preview", timeout=config.API_TIMEOUT)
-                if res.status_code == 200 and res.content:
-                    frame = cv2.imdecode(np.frombuffer(res.content, dtype=np.uint8), cv2.IMREAD_COLOR)
-                    if frame is not None:
-                        with self._frame_lock:
-                            self._latest_frame = frame
-            except Exception:
-                pass
+            frame = None
+            if self.app._is_local_mode():
+                cam = camera_manager.get_camera(self.cam_id)
+                if cam is not None:
+                    frame = cam.get_annotated_frame()
+            else:
+                try:
+                    url = self.app.server_url.get().rstrip("/")
+                    res = self._session.get(f"{url}/api/cameras/{self.cam_id}/preview", timeout=config.API_TIMEOUT)
+                    if res.status_code == 200 and res.content:
+                        frame = cv2.imdecode(np.frombuffer(res.content, dtype=np.uint8), cv2.IMREAD_COLOR)
+                except Exception:
+                    pass
+
+            if frame is not None:
+                with self._frame_lock:
+                    self._latest_frame = frame
+
             elapsed = time.time() - t0
             target = config.POPOUT_UPDATE_MS / 1000
-            time.sleep(max(0.002, target - elapsed))
+            time.sleep(max(0.005, target - elapsed))
 
     def _refresh(self) -> None:
         if not self._running:
@@ -115,6 +125,20 @@ class ZoneEditorWindow(tk.Toplevel):
         threading.Thread(target=self._load_frame, daemon=True).start()
 
     def _load_frame(self) -> None:
+        if self.app._is_local_mode():
+            cam = camera_manager.get_camera(self.cam_id)
+            if cam is None:
+                self.after(0, lambda: self.status_label.config(text="Kamera topilmadi", fg="#ff5555"))
+                return
+            frame = cam.get_raw_frame()
+            existing = cam.get_zone()
+            if frame is None:
+                self.after(0, lambda: self.status_label.config(
+                    text="Kadr olinmadi (kamera hali ulanmagan bo'lishi mumkin)", fg="#ff5555"))
+                return
+            self.after(0, lambda: self._display_frame(frame, existing))
+            return
+
         url = self.app.server_url.get().rstrip("/")
         try:
             res = requests.get(f"{url}/api/cameras/{self.cam_id}/preview", params={"raw": 1}, timeout=config.API_TIMEOUT)
@@ -183,6 +207,11 @@ class ZoneEditorWindow(tk.Toplevel):
         threading.Thread(target=self._clear_zone_worker, daemon=True).start()
 
     def _clear_zone_worker(self) -> None:
+        if self.app._is_local_mode():
+            cam = camera_manager.get_camera(self.cam_id)
+            if cam is not None:
+                cam.clear_zone()
+            return
         url = self.app.server_url.get().rstrip("/")
         try:
             requests.delete(f"{url}/api/cameras/{self.cam_id}/zone", timeout=config.API_TIMEOUT)
@@ -197,6 +226,13 @@ class ZoneEditorWindow(tk.Toplevel):
         threading.Thread(target=self._save_zone_worker, args=(polygon_px,), daemon=True).start()
 
     def _save_zone_worker(self, polygon_px: list[list[int]]) -> None:
+        if self.app._is_local_mode():
+            cam = camera_manager.get_camera(self.cam_id)
+            if cam is not None:
+                cam.set_zone(polygon_px)
+                self.after(0, self._finish_saved)
+            return
+
         url = self.app.server_url.get().rstrip("/")
         try:
             res = requests.post(f"{url}/api/cameras/{self.cam_id}/zone", json={"polygon": polygon_px}, timeout=config.API_TIMEOUT)
@@ -406,11 +442,22 @@ class MonitoringApp:
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Xatolik", f"Yuklab olishda xatolik yuz berdi: {e}", parent=self.root))
 
+    def _is_local_mode(self) -> bool:
+        url = self.server_url.get().strip().lower()
+        return any(url.startswith(p) for p in ("http://localhost", "http://127.0.0.1", "http://0.0.0.0", "local"))
+
     def check_server_connection(self) -> None:
         self.conn_status_label.config(text="⏳ Tekshirilmoqda...", fg="#ffcc00")
         threading.Thread(target=self._check_connection_worker, daemon=True).start()
 
     def _check_connection_worker(self) -> None:
+        if self._is_local_mode():
+            import torch
+            gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "Direct In-Memory (CPU)"
+            cam_count = len(camera_manager.list_cameras())
+            self.root.after(0, lambda: self._on_connected(f"Direct In-Memory ({gpu_name})", cam_count))
+            return
+
         url = self.server_url.get().rstrip("/")
         try:
             res = requests.get(f"{url}/api/health", timeout=config.API_TIMEOUT)
@@ -433,11 +480,39 @@ class MonitoringApp:
         self.conn_status_label.config(text=f"🔴 {msg}", fg="#ff5555")
 
     def poll_status_loop(self) -> None:
-        if self.is_connected:
-            threading.Thread(target=self._poll_status_worker, daemon=True).start()
+        threading.Thread(target=self._poll_status_worker, daemon=True).start()
         self.root.after(config.STATUS_POLL_MS, self.poll_status_loop)
 
     def _poll_status_worker(self) -> None:
+        if self._is_local_mode():
+            cams = [
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "source": c.source,
+                    "connected": c.connected,
+                    "running": c.running,
+                    "has_zone": c.get_zone() is not None,
+                    "last_error": c.last_error,
+                }
+                for c in camera_manager.list_cameras()
+            ]
+            models_list = [
+                {"id": mid, "label": config.MODEL_LABELS[mid], "enabled": models_manager.is_enabled(mid)}
+                for mid in config.MODEL_IDS
+            ]
+            events = [
+                {"camera_id": c.id, "camera_name": c.name, **e}
+                for c in camera_manager.list_cameras()
+                for e in c.get_recent_events(40)
+            ]
+            events.sort(key=lambda e: e.get("ts", 0), reverse=True)
+            self.root.after(0, lambda: self._apply_status(cams, models_list, events))
+            return
+
+        if not self.is_connected:
+            return
+
         url = self.server_url.get().rstrip("/")
         try:
             cams = requests.get(f"{url}/api/cameras", timeout=config.API_TIMEOUT).json().get("cameras", [])
@@ -457,6 +532,10 @@ class MonitoringApp:
         threading.Thread(target=self._toggle_model_worker, args=(model_id, enabled), daemon=True).start()
 
     def _toggle_model_worker(self, model_id: str, enabled: bool) -> None:
+        if self._is_local_mode():
+            models_manager.set_enabled(model_id, enabled)
+            return
+
         url = self.server_url.get().rstrip("/")
         try:
             requests.post(f"{url}/api/models/toggle", json={"model_id": model_id, "enabled": enabled},
@@ -517,7 +596,7 @@ class MonitoringApp:
 
         tk.Label(dlg, text="Kamera nomi:", bg="#2d2d2d", fg="#fff", font=("Segoe UI", 10)).pack(
             anchor=tk.W, padx=14, pady=(14, 2))
-        name_var = tk.StringVar(value="Kamera1")
+        name_var = tk.StringVar(value=f"Kamera{len(self.camera_order) + 1}")
         tk.Entry(dlg, textvariable=name_var, font=("Segoe UI", 10), bg="#3c3c3c", fg="#fff",
                   insertbackground="#fff").pack(fill=tk.X, padx=14)
 
@@ -528,7 +607,7 @@ class MonitoringApp:
         tk.Entry(dlg, textvariable=source_var, font=("Segoe UI", 10), bg="#3c3c3c", fg="#fff",
                   insertbackground="#fff").pack(fill=tk.X, padx=14)
 
-        tk.Label(dlg, text="Masalan: rtsp://user:parol@192.168.1.10:554/Streaming/Channels/101",
+        tk.Label(dlg, text="Masalan: rtsp://user:parol@192.168.1.10:554/Streaming/Channels/102",
                  bg="#2d2d2d", fg="#888888", font=("Segoe UI", 8, "italic")).pack(anchor=tk.W, padx=14, pady=(2, 10))
 
         btn_frame = tk.Frame(dlg, bg="#2d2d2d")
@@ -549,6 +628,11 @@ class MonitoringApp:
                   relief=tk.FLAT, padx=12, pady=5, cursor="hand2").pack(side=tk.LEFT, padx=4)
 
     def _add_camera_worker(self, name: str, source: str) -> None:
+        if self._is_local_mode():
+            camera_manager.add_camera(name, source)
+            self.root.after(0, self._poll_status_worker)
+            return
+
         url = self.server_url.get().rstrip("/")
         try:
             res = requests.post(f"{url}/api/cameras", json={"name": name, "source": source}, timeout=config.API_TIMEOUT)
@@ -569,6 +653,11 @@ class MonitoringApp:
         threading.Thread(target=self._remove_camera_worker, args=(cam_id,), daemon=True).start()
 
     def _remove_camera_worker(self, cam_id: str) -> None:
+        if self._is_local_mode():
+            camera_manager.remove_camera(cam_id)
+            self.root.after(0, self._poll_status_worker)
+            return
+
         url = self.server_url.get().rstrip("/")
         try:
             requests.delete(f"{url}/api/cameras/{cam_id}", timeout=config.API_TIMEOUT)
@@ -633,11 +722,54 @@ class MonitoringApp:
 
     def _preview_fetch_loop(self) -> None:
         while True:
-            if not self.is_connected:
-                time.sleep(0.5)
+            t0 = time.time()
+            frame = None
+
+            if self._is_local_mode():
+                if self.view_mode == "single" and self.selected_camera_id:
+                    cam = camera_manager.get_camera(self.selected_camera_id)
+                    if cam is not None:
+                        frame = cam.get_annotated_frame()
+                else:
+                    cams = camera_manager.list_cameras()
+                    if not cams:
+                        frame = None
+                    else:
+                        tw, th = config.GRID_TILE_W, config.GRID_TILE_H
+                        cols = int(np.ceil(np.sqrt(len(cams))))
+                        rows = int(np.ceil(len(cams) / cols))
+                        tiles = []
+                        for cam in cams:
+                            f = cam.get_annotated_frame()
+                            if f is None:
+                                tile = np.zeros((th, tw, 3), dtype=np.uint8)
+                                status = cam.last_error or "ulanmoqda..."
+                                cv2.putText(tile, f"{cam.name}: {status}", (10, th // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 100, 255), 1, cv2.LINE_AA)
+                            else:
+                                tile = cv2.resize(f, (tw, th))
+                            cv2.rectangle(tile, (0, 0), (tw, 26), (30, 30, 30), -1)
+                            dot_color = (0, 230, 0) if cam.connected else (0, 0, 255)
+                            cv2.circle(tile, (14, 13), 5, dot_color, -1)
+                            cv2.putText(tile, cam.name, (26, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                            tiles.append(tile)
+                        while len(tiles) < rows * cols:
+                            tiles.append(np.zeros((th, tw, 3), dtype=np.uint8))
+                        row_imgs = [np.hstack(tiles[r * cols:(r + 1) * cols]) for r in range(rows)]
+                        frame = np.vstack(row_imgs)
+
+                if frame is not None:
+                    with self._frame_lock:
+                        self._latest_frame = frame
+
+                elapsed = time.time() - t0
+                target = (config.GUI_UPDATE_MS if self.view_mode == "single" else config.GRID_UPDATE_MS) / 1000
+                time.sleep(max(0.005, target - elapsed))
                 continue
 
-            t0 = time.time()
+            if not self.is_connected:
+                time.sleep(0.3)
+                continue
+
             interval = config.GRID_UPDATE_MS / 1000
             try:
                 url = self.server_url.get().rstrip("/")
@@ -669,7 +801,10 @@ class MonitoringApp:
             max_h = max(200, self.display_label.winfo_height() or 600)
             scale = min(max_w / w, max_h / h)
             new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
-            resized = cv2.resize(frame, (new_w, new_h))
+            if (new_w, new_h) != (w, h):
+                resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            else:
+                resized = frame
             rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
             self._photo_ref = ImageTk.PhotoImage(image=Image.fromarray(rgb))
             self.display_label.config(image=self._photo_ref)
