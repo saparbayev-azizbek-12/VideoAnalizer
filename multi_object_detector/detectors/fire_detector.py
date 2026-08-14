@@ -23,8 +23,12 @@ _vit_model = None
 
 def _get_model_source() -> str:
     vit_dir = Path(config.VIT_FIRE_MODEL_DIR)
+    safetensors_file = vit_dir / "model.safetensors"
     bin_file = vit_dir / "pytorch_model.bin"
-    if vit_dir.exists() and bin_file.exists() and bin_file.stat().st_size > 10_000_000:
+    if vit_dir.exists() and (
+        (safetensors_file.exists() and safetensors_file.stat().st_size > 10_000_000)
+        or (bin_file.exists() and bin_file.stat().st_size > 10_000_000)
+    ):
         return str(vit_dir)
     return config.VIT_FIRE_HF_REPO
 
@@ -34,8 +38,20 @@ def get_model():
     if _vit_processor is None or _vit_model is None:
         from transformers import ViTForImageClassification, ViTImageProcessor
         source = _get_model_source()
-        _vit_processor = ViTImageProcessor.from_pretrained(source)
-        _vit_model = ViTForImageClassification.from_pretrained(source)
+        is_local = os.path.isdir(source)
+        try:
+            _vit_processor = ViTImageProcessor.from_pretrained(source, local_files_only=is_local)
+            _vit_model = ViTForImageClassification.from_pretrained(source, local_files_only=is_local)
+        except Exception:
+            _vit_processor = ViTImageProcessor.from_pretrained(config.VIT_FIRE_HF_REPO)
+            _vit_model = ViTForImageClassification.from_pretrained(config.VIT_FIRE_HF_REPO)
+            try:
+                vit_dir = Path(config.VIT_FIRE_MODEL_DIR)
+                vit_dir.mkdir(parents=True, exist_ok=True)
+                _vit_processor.save_pretrained(str(vit_dir))
+                _vit_model.save_pretrained(str(vit_dir))
+            except Exception:
+                pass
         _vit_model.eval()
         try:
             import torch

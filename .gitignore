@@ -14,7 +14,10 @@ uv.lock
 videoanalizer.egg-info/
 
 *.jpg
-multi-object-detector/dataset/*
-multi_object_detector/analysis/models/vit-fire-detection/*
+multi_object_detector/dataset/*
+multi_object_detector/detectors/models/vit-fire-detection/model.safetensors
+multi_object_detector/detectors/models/vit-fire-detection/*.bin
+multi_object_detector/detectors/models/yolov8*.pt
+multi_object_detector/video_jobs/
 
 form-detection/

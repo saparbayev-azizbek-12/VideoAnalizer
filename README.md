@@ -108,6 +108,15 @@ PPE_CONF_THRESHOLD=0.40
 SNAPSHOT_COOLDOWN_SEC=2.0
 ```
 
+### 3. AI Modellarni serverga bir marta yuklab olish
+
+Katta hajmdagi `.safetensors` va AI model og'irliklarini serverning o'zida to'g'ridan-to'g'ri yuklab olish uchun:
+```bash
+cd multi_object_detector
+uv run download_models.py
+```
+*Ushbu buyruq barcha kerakli AI modellarni bir marta yuklab `detectors/models/` papkasiga saqlaydi, shundan so'ng server to'liq offline ishlaydi.*
+
 ---
 
 ## 🖥 Dasturlarni Ishga Tushirish
