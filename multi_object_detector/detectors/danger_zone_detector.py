@@ -44,18 +44,37 @@ def load_zone(zone_path: str) -> np.ndarray:
     return polygon
 
 
+def is_person_bottom_in_zone(
+    polygon: np.ndarray,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    num_samples: int = 9,
+) -> bool:
+    contour = np.ascontiguousarray(polygon, dtype=np.int32)
+    h = max(1.0, y2 - y1)
+    xs = np.linspace(x1, x2, num_samples)
+    y_levels = [y2, y2 - 0.04 * h, y2 - 0.08 * h]
+    for px in xs:
+        for py in y_levels:
+            if cv2.pointPolygonTest(contour, (float(px), float(py)), False) >= 0:
+                return True
+    return False
+
+
 class DangerZoneState:
     def __init__(self, polygon: np.ndarray, model: Optional[Any] = None):
         self.model = model or get_model()
-        self.polygon = polygon
-        self.zone = sv.PolygonZone(polygon=polygon)
+        self.polygon = np.array(polygon, dtype=np.int32)
+        self.zone = sv.PolygonZone(polygon=self.polygon)
         self.zone_annotator = sv.PolygonZoneAnnotator(zone=self.zone, color=sv.Color.RED, thickness=2)
         self.box_annotator = sv.BoxAnnotator(color=sv.Color.RED)
         self.label_annotator = sv.LabelAnnotator()
 
     def update_polygon(self, polygon: np.ndarray) -> None:
-        self.polygon = polygon
-        self.zone = sv.PolygonZone(polygon=polygon)
+        self.polygon = np.array(polygon, dtype=np.int32)
+        self.zone = sv.PolygonZone(polygon=self.polygon)
         self.zone_annotator = sv.PolygonZoneAnnotator(zone=self.zone, color=sv.Color.RED, thickness=2)
 
     def analyze(self, frame: np.ndarray, conf: float = 0.35, draw_boxes: bool = True) -> tuple[np.ndarray, int, bool]:
@@ -76,10 +95,22 @@ class DangerZoneState:
         person_mask = (detections.class_id == 0) | (detections.class_id == 1)
         people = detections[person_mask]
 
-        in_zone_mask = self.zone.trigger(detections=people)
-        people_in_zone = int(in_zone_mask.sum())
+        sv_in_zone = self.zone.trigger(detections=people)
+        in_zone_mask = []
+
+        for i in range(len(people)):
+            x1, y1, x2, y2 = map(float, people.xyxy[i])
+            is_in = (
+                (bool(sv_in_zone[i]) if i < len(sv_in_zone) else False)
+                or is_person_bottom_in_zone(self.polygon, x1, y1, x2, y2)
+            )
+            in_zone_mask.append(is_in)
+
+        in_zone_mask = np.array(in_zone_mask, dtype=bool) if len(in_zone_mask) > 0 else np.array([], dtype=bool)
+        people_in_zone = int(np.sum(in_zone_mask))
         breach = people_in_zone > 0
 
+        self.zone.current_count = people_in_zone
         annotated = self.zone_annotator.annotate(scene=frame)
 
         if draw_boxes and len(people) > 0:
