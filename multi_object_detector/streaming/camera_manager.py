@@ -45,7 +45,7 @@ class CameraWorker:
         self._stream_filter = frame_filter.StreamCorruptionFilter(camera_id=cam_id)
         self.events: deque = deque(maxlen=300)
         self.frame_idx = 0
-        self.fps_estimate = 10.0
+        self.fps_estimate = 20.0
         self._last_frame_time: Optional[float] = None
         self._fall_tracker = sv.ByteTrack()
         self._fall_pose: Optional[fall_detector.RTMPoseEstimator] = None
