@@ -124,7 +124,7 @@ async def delete_camera(cam_id: str):
 
 
 class ZoneRequest(BaseModel):
-    polygon: list[list[int]]
+    polygon: list[list[float]]
 
 
 @app.get("/api/cameras/{cam_id}/zone")
@@ -239,7 +239,7 @@ def _encode_jpeg(frame: np.ndarray, quality: int = 75) -> bytes:
 
 
 @app.get("/api/cameras/{cam_id}/preview")
-async def camera_preview(cam_id: str, raw: int = 0, max_w: int = 960, max_h: int = 540):
+async def camera_preview(cam_id: str, raw: int = 0, max_w: int = 0, max_h: int = 0):
     cam = camera_manager.get_camera(cam_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Kamera topilmadi")
@@ -249,12 +249,15 @@ async def camera_preview(cam_id: str, raw: int = 0, max_w: int = 960, max_h: int
         frame = _placeholder_tile(640, 360, f"{cam.name}: ulanmoqda...")
     else:
         h, w = frame.shape[:2]
+        if not raw and max_w <= 0 and max_h <= 0:
+            max_w, max_h = 960, 540
         if max_w > 0 and max_h > 0 and (w > max_w or h > max_h):
             scale = min(max_w / w, max_h / h)
             new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
             frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-    return Response(content=_encode_jpeg(frame, quality=72), media_type="image/jpeg")
+    quality = 85 if raw else 72
+    return Response(content=_encode_jpeg(frame, quality=quality), media_type="image/jpeg")
 
 
 @app.get("/api/cameras_grid_preview")

@@ -141,7 +141,7 @@ class ZoneEditorWindow(tk.Toplevel):
 
         url = self.app.server_url.get().rstrip("/")
         try:
-            res = requests.get(f"{url}/api/cameras/{self.cam_id}/preview", params={"raw": 1}, timeout=config.API_TIMEOUT)
+            res = requests.get(f"{url}/api/cameras/{self.cam_id}/preview", params={"raw": 1, "max_w": 0, "max_h": 0}, timeout=config.API_TIMEOUT)
             frame = cv2.imdecode(np.frombuffer(res.content, dtype=np.uint8), cv2.IMREAD_COLOR)
             zone_res = requests.get(f"{url}/api/cameras/{self.cam_id}/zone", timeout=config.API_TIMEOUT)
             existing = zone_res.json().get("polygon") if zone_res.status_code == 200 else None
@@ -155,21 +155,26 @@ class ZoneEditorWindow(tk.Toplevel):
         self.after(0, lambda: self._display_frame(frame, existing))
 
     def _display_frame(self, frame: np.ndarray, existing_polygon) -> None:
-        h, w = frame.shape[:2]
-        self.scale = min(self.MAX_W / w, self.MAX_H / h, 1.0)
-        disp_w, disp_h = int(w * self.scale), int(h * self.scale)
-        resized = cv2.resize(frame, (disp_w, disp_h))
+        self.frame_h, self.frame_w = frame.shape[:2]
+        self.scale = min(self.MAX_W / self.frame_w, self.MAX_H / self.frame_h, 1.0)
+        self.disp_w = int(self.frame_w * self.scale)
+        self.disp_h = int(self.frame_h * self.scale)
+        resized = cv2.resize(frame, (self.disp_w, self.disp_h))
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         self.photo_ref = ImageTk.PhotoImage(image=Image.fromarray(rgb))
 
-        self.canvas = tk.Canvas(self.canvas_frame, width=disp_w, height=disp_h,
+        self.canvas = tk.Canvas(self.canvas_frame, width=self.disp_w, height=self.disp_h,
                                  bg="#000000", highlightthickness=0, cursor="crosshair")
         self.canvas.pack()
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo_ref)
         self.canvas.bind("<Button-1>", self.on_canvas_click)
 
         if existing_polygon:
-            self.points = [[px * self.scale, py * self.scale] for px, py in existing_polygon]
+            is_norm = all(0.0 <= float(p[0]) <= 1.0 and 0.0 <= float(p[1]) <= 1.0 for p in existing_polygon)
+            if is_norm:
+                self.points = [[float(px) * self.disp_w, float(py) * self.disp_h] for px, py in existing_polygon]
+            else:
+                self.points = [[float(px) * self.scale, float(py) * self.scale] for px, py in existing_polygon]
             self._redraw_polygon()
 
         self.status_label.config(text=f"Nuqtalar: {len(self.points)}", fg="#00e676")
@@ -222,20 +227,22 @@ class ZoneEditorWindow(tk.Toplevel):
         if len(self.points) < 3:
             messagebox.showwarning("Ogohlantirish", "Kamida 3 ta nuqta belgilang!", parent=self)
             return
-        polygon_px = [[int(x / self.scale), int(y / self.scale)] for x, y in self.points]
-        threading.Thread(target=self._save_zone_worker, args=(polygon_px,), daemon=True).start()
+        disp_w = max(1, getattr(self, "disp_w", int(self.MAX_W * self.scale)))
+        disp_h = max(1, getattr(self, "disp_h", int(self.MAX_H * self.scale)))
+        polygon_norm = [[round(x / disp_w, 6), round(y / disp_h, 6)] for x, y in self.points]
+        threading.Thread(target=self._save_zone_worker, args=(polygon_norm,), daemon=True).start()
 
-    def _save_zone_worker(self, polygon_px: list[list[int]]) -> None:
+    def _save_zone_worker(self, polygon_norm: list[list[float]]) -> None:
         if self.app._is_local_mode():
             cam = camera_manager.get_camera(self.cam_id)
             if cam is not None:
-                cam.set_zone(polygon_px)
+                cam.set_zone(polygon_norm)
                 self.after(0, self._finish_saved)
             return
 
         url = self.app.server_url.get().rstrip("/")
         try:
-            res = requests.post(f"{url}/api/cameras/{self.cam_id}/zone", json={"polygon": polygon_px}, timeout=config.API_TIMEOUT)
+            res = requests.post(f"{url}/api/cameras/{self.cam_id}/zone", json={"polygon": polygon_norm}, timeout=config.API_TIMEOUT)
             if res.status_code == 200:
                 self.after(0, self._finish_saved)
             else:

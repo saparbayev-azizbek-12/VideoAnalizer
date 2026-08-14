@@ -28,20 +28,6 @@ class CameraEvent:
     extra: dict = field(default_factory=dict)
 
 
-@dataclass
-class ActiveOverlay:
-    zone_breach: bool = False
-    zone_people_count: int = 0
-    fire_events: list[dict] = field(default_factory=list)
-    has_fire: bool = False
-    has_smoke: bool = False
-    fall_events: list[dict] = field(default_factory=list)
-    any_fall: bool = False
-    ppe_violations: list[dict] = field(default_factory=list)
-    has_ppe_violation: bool = False
-    ts: float = 0.0
-
-
 class CameraWorker:
     def __init__(self, cam_id: str, name: str, source: str):
         self.id = cam_id
@@ -50,7 +36,6 @@ class CameraWorker:
         self._lock = threading.Lock()
         self._raw_frame: Optional[np.ndarray] = None
         self._annotated_frame: Optional[np.ndarray] = None
-        self._overlay: ActiveOverlay = ActiveOverlay()
         self._connected = False
         self._running = False
         self._capture_thread: Optional[threading.Thread] = None
@@ -68,6 +53,8 @@ class CameraWorker:
         self._fall_track_states: dict[int, fall_detector.TrackState] = {}
         self._fire_validator = fire_detector.TemporalValidator(window=6, min_hits=3)
         self._zone_polygon: Optional[np.ndarray] = None
+        self._zone_polygon_norm: Optional[list[list[float]]] = None
+        self._zone_resolution: Optional[tuple[int, int]] = None
         self._zone_state: Optional[danger_zone_detector.DangerZoneState] = None
         self._zone_lock = threading.Lock()
         self._last_dataset_save: dict[str, float] = {}
@@ -109,129 +96,47 @@ class CameraWorker:
                 return frame
             return None
 
-    def _render_overlay(self, frame: np.ndarray, overlay: ActiveOverlay) -> np.ndarray:
-        h, w = frame.shape[:2]
-        with self._zone_lock:
-            poly = self._zone_polygon
-
-        # 1. Danger zone polygon chizish
-        if poly is not None and len(poly) >= 3:
-            cv2.polylines(frame, [poly], isClosed=True, color=(0, 0, 220), thickness=2, lineType=cv2.LINE_AA)
-            for pt in poly:
-                cv2.circle(frame, (int(pt[0]), int(pt[1])), 4, (0, 0, 255), -1)
-
-        now = time.time()
-        # Deteksiya natijalari 1.5 soniya davomida ekranda silliq saqlanib turadi
-        is_fresh = (now - overlay.ts) < 1.5
-
-        if is_fresh:
-            banner_y = 0
-
-            # 2. Xavfli hudud buzilishi
-            if overlay.zone_breach:
-                cv2.rectangle(frame, (0, banner_y), (w, banner_y + 36), (0, 0, 200), -1)
-                cv2.putText(
-                    frame,
-                    f"DIQQAT! XAVFLI HUDUDDA {overlay.zone_people_count} ODAM BOR",
-                    (15, banner_y + 25),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.65,
-                    (255, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                banner_y += 38
-
-            # 3. Yong'in / Tutun
-            if overlay.fire_events or overlay.has_fire or overlay.has_smoke:
-                cv2.rectangle(frame, (0, banner_y), (w, banner_y + 36), (0, 69, 255), -1)
-                cv2.putText(
-                    frame,
-                    "DIQQAT! YONG'IN / TUTUN ANIQLANDI",
-                    (15, banner_y + 25),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.65,
-                    (255, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                banner_y += 38
-                for ev in overlay.fire_events:
-                    box = ev.get("box")
-                    if box:
-                        x1, y1, x2, y2 = map(int, box)
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 69, 255), 2, cv2.LINE_AA)
-                        lbl = f"{ev.get('type', 'Yongin')} {ev.get('confidence', 0)*100:.0f}%"
-                        cv2.putText(frame, lbl, (x1, max(15, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 69, 255), 2)
-
-            # 4. Yiqilish holati
-            if overlay.fall_events or overlay.any_fall:
-                cv2.rectangle(frame, (0, banner_y), (w, banner_y + 36), (0, 0, 220), -1)
-                cv2.putText(
-                    frame,
-                    "DIQQAT! YIQILISH HOLATI ANIQLANDI",
-                    (15, banner_y + 25),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.65,
-                    (255, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                banner_y += 38
-                for ev in overlay.fall_events:
-                    tid = ev.get("track_id", "")
-                    cv2.putText(
-                        frame,
-                        f"YIQILISH ID {tid}",
-                        (w - 200, 35),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 0, 255),
-                        2,
-                        cv2.LINE_AA,
-                    )
-
-            # 5. PPE / Maxsus kiyim qoidabuzarligi
-            if overlay.ppe_violations:
-                for viol in overlay.ppe_violations:
-                    box = viol.get("box")
-                    missing = viol.get("missing", [])
-                    if box:
-                        x1, y1, x2, y2 = map(int, box)
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 220), 2, cv2.LINE_AA)
-                        missing_str = ", ".join(
-                            "Kask" if m == "Safety Helmet" else "Jilet"
-                            for m in missing
-                        )
-                        lbl = f"PPE yo'q: {missing_str}"
-                        (tw, th), bl = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-                        cv2.rectangle(frame, (x1, max(0, y1 - th - 6)), (x1 + tw + 6, max(0, y1)), (0, 0, 220), -1)
-                        cv2.putText(frame, lbl, (x1 + 3, max(0, y1) - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
-
-        return frame
-
     def get_recent_events(self, limit: int = 50) -> list[dict]:
         with self._lock:
             items = list(self.events)[-limit:]
         return [{"ts": e.ts, "model": e.model, "label": e.label, **e.extra} for e in reversed(items)]
 
-    def set_zone(self, polygon_px: list[list[int]]) -> None:
-        arr = np.array(polygon_px, dtype=np.int32)
-        new_state = models_manager.new_danger_zone_state(arr)
+    def set_zone(self, polygon: list[list[float | int]]) -> None:
+        if not polygon or len(polygon) < 3:
+            return
+        with self._lock:
+            cur_frame = self._raw_frame
+        h, w = (cur_frame.shape[:2]) if cur_frame is not None else (1080, 1920)
+
+        is_norm = all(0.0 <= float(p[0]) <= 1.0 and 0.0 <= float(p[1]) <= 1.0 for p in polygon)
+        if is_norm:
+            norm_poly = [[float(p[0]), float(p[1])] for p in polygon]
+            pixel_poly = np.array([[int(p[0] * w), int(p[1] * h)] for p in norm_poly], dtype=np.int32)
+        else:
+            pixel_poly = np.array(polygon, dtype=np.int32)
+            norm_poly = [[float(p[0]) / max(1, w), float(p[1]) / max(1, h)] for p in pixel_poly]
+
+        new_state = models_manager.new_danger_zone_state(pixel_poly)
         with self._zone_lock:
-            self._zone_polygon = arr
+            self._zone_polygon = pixel_poly
+            self._zone_polygon_norm = norm_poly
+            self._zone_resolution = (w, h)
             self._zone_state = new_state
 
     def clear_zone(self) -> None:
         with self._zone_lock:
             self._zone_polygon = None
+            self._zone_polygon_norm = None
+            self._zone_resolution = None
             self._zone_state = None
 
-    def get_zone(self) -> Optional[list[list[int]]]:
+    def get_zone(self) -> Optional[list[list[float]]]:
         with self._zone_lock:
-            if self._zone_polygon is None:
-                return None
-            return self._zone_polygon.tolist()
+            if self._zone_polygon_norm is not None:
+                return self._zone_polygon_norm
+            if self._zone_polygon is not None:
+                return self._zone_polygon.tolist()
+            return None
 
     def start(self) -> None:
         with self._lock:
@@ -408,16 +313,12 @@ class CameraWorker:
         if not frame_filter.is_frame_valid(frame):
             return frame
         out = frame.copy()
-        overlay = ActiveOverlay(ts=time.time())
 
         if models_manager.is_enabled("fire"):
             try:
                 out, fire_events, has_fire, has_smoke = models_manager.analyze_fire(
                     out, validator=self._fire_validator
                 )
-                overlay.fire_events = fire_events
-                overlay.has_fire = has_fire
-                overlay.has_smoke = has_smoke
                 for ev in fire_events:
                     snap = self._save_dataset_snapshot("fire", out, ev)
                     extra = dict(box=ev["box"], confidence=ev["confidence"], type=ev["type"])
@@ -440,8 +341,6 @@ class CameraWorker:
                     track_states=self._fall_track_states,
                     tracker=self._fall_tracker,
                 )
-                overlay.fall_events = fall_events
-                overlay.any_fall = any_fall
                 for ev in fall_events:
                     snap = self._save_dataset_snapshot("fall", out, ev)
                     extra = dict(track_id=ev["track_id"])
@@ -455,10 +354,21 @@ class CameraWorker:
             try:
                 with self._zone_lock:
                     zone_state = self._zone_state
+                    zone_norm = self._zone_polygon_norm
+                    zone_res = self._zone_resolution
+
+                if zone_norm is not None:
+                    h, w = frame.shape[:2]
+                    if zone_res != (w, h) or zone_state is None:
+                        pixel_poly = np.array([[int(p[0] * w), int(p[1] * h)] for p in zone_norm], dtype=np.int32)
+                        zone_state = models_manager.new_danger_zone_state(pixel_poly)
+                        with self._zone_lock:
+                            self._zone_polygon = pixel_poly
+                            self._zone_state = zone_state
+                            self._zone_resolution = (w, h)
+
                 if zone_state is not None:
                     out, people_in_zone, breach = models_manager.analyze_danger_zone(zone_state, out)
-                    overlay.zone_breach = breach
-                    overlay.zone_people_count = people_in_zone
                     if breach:
                         snap = self._save_dataset_snapshot("danger_zone", out, {"people_in_zone": people_in_zone})
                         extra = dict(people_in_zone=people_in_zone)
@@ -471,8 +381,6 @@ class CameraWorker:
         if models_manager.is_enabled("ppe"):
             try:
                 out, ppe_violations, has_ppe_violation = models_manager.analyze_ppe(out)
-                overlay.ppe_violations = ppe_violations
-                overlay.has_ppe_violation = has_ppe_violation
                 if has_ppe_violation:
                     snap = self._save_dataset_snapshot("ppe", out, {"violation_count": len(ppe_violations)})
                     for i, viol in enumerate(ppe_violations):
@@ -493,7 +401,6 @@ class CameraWorker:
                 sys_logger.error("CameraWorker", f"[{self.name}] PPE xatoligi: {e}", exc=e)
 
         with self._lock:
-            self._overlay = overlay
             self._annotated_frame = out
 
         return out
