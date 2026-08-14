@@ -6,7 +6,6 @@ import math
 import subprocess
 import numpy as np
 import supervision as sv
-from pathlib import Path
 from ultralytics import YOLO
 from collections import deque
 from dataclasses import dataclass, field

@@ -6,7 +6,7 @@ from typing import Optional, Any
 
 from multi_object_detector.core import config
 from multi_object_detector.core.system_logger import sys_logger
-from multi_object_detector.detectors import fire_detector, danger_zone_detector, ppe_detector, fall_detector
+from multi_object_detector.detectors import fire_detector, danger_zone_detector, ppe_detector, fall_detector, frame_filter
 
 _state_lock = threading.Lock()
 _enabled: dict[str, bool] = dict(config.MODEL_DEFAULT_ENABLED)
@@ -90,6 +90,8 @@ def analyze_fire(
     frame: np.ndarray,
     validator: Optional[fire_detector.TemporalValidator] = None,
 ) -> tuple[np.ndarray, list[dict], bool, bool]:
+    if not frame_filter.is_frame_valid(frame):
+        return frame, [], False, False
     model = get_fire_model()
     with _fire_infer_lock:
         return fire_detector.detect_fire_frame(
@@ -111,6 +113,8 @@ def analyze_danger_zone(
     frame: np.ndarray,
     draw_boxes: bool = True,
 ) -> tuple[np.ndarray, int, bool]:
+    if not frame_filter.is_frame_valid(frame):
+        return frame, 0, False
     with _zone_infer_lock:
         return state.analyze(
             frame,
@@ -120,6 +124,8 @@ def analyze_danger_zone(
 
 
 def analyze_ppe(frame: np.ndarray, draw_person_boxes: bool = True) -> tuple[np.ndarray, list[dict], bool]:
+    if not frame_filter.is_frame_valid(frame):
+        return frame, [], False
     model = get_ppe_model()
     with _ppe_infer_lock:
         return ppe_detector.analyze_ppe_frame(
@@ -138,6 +144,8 @@ def analyze_fall(
     track_states: dict[int, fall_detector.TrackState],
     tracker: Optional[Any] = None,
 ) -> tuple[np.ndarray, list[dict], bool]:
+    if not frame_filter.is_frame_valid(frame):
+        return frame, [], False
     model = get_fall_model()
     with _fall_infer_lock:
         return fall_detector.process_fall_frame(

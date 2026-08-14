@@ -17,7 +17,7 @@ from multi_object_detector.core.stream_logger import stream_logger
 from multi_object_detector.detectors import manager as models_manager, frame_filter
 from multi_object_detector.detectors import fall_detector, danger_zone_detector, fire_detector
 
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|buffer_size;1024000|max_delay;500000|stimeout;5000000"
 
 
 @dataclass
@@ -171,8 +171,8 @@ class CameraWorker:
                     continue
 
                 consecutive_read_fails += 1
-                if consecutive_read_fails < 5:
-                    time.sleep(0.01)
+                if consecutive_read_fails < 30:
+                    time.sleep(0.02)
                     continue
 
                 drop_err = stream_logger.log_stream_drop(self.id, self.name, self.source)
@@ -223,7 +223,6 @@ class CameraWorker:
             if not is_valid:
                 stream_logger.log_corruption(self.id, self.name, self.source, corrupt_reason or "Kadr buzilgan")
                 with self._lock:
-                    self._last_error = f"Buzilgan kadr o'tkazib yuborildi ({corrupt_reason})"
                     self._annotated_frame = frame
                 continue
 

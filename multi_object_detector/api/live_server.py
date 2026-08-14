@@ -16,7 +16,7 @@ from multi_object_detector.streaming import camera_manager
 from multi_object_detector.core.system_logger import sys_logger
 from multi_object_detector.detectors import manager as models_manager
 
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|buffer_size;1024000|max_delay;500000|stimeout;5000000"
 app = FastAPI(title="AI Video Monitoring Server")
 
 app.add_middleware(
