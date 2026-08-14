@@ -10,8 +10,8 @@ import supervision as sv
 from ultralytics import YOLO
 from typing import Optional, Any
 
-from multi_object_detector import config
-from multi_object_detector.system_logger import sys_logger
+from multi_object_detector.core import config
+from multi_object_detector.core.system_logger import sys_logger
 
 PERSON_CLASS_ID = 0
 _PERSON_MODEL: Optional[Any] = None
@@ -67,7 +67,7 @@ class DangerZoneState:
                 try:
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     detections = self.model.predict(frame_rgb)
-                except Exception as _e:
+                except Exception:
                     return frame, 0, False
         else:
             result = self.model(frame, conf=conf, verbose=False)[0]
@@ -178,7 +178,6 @@ def main():
         writer_csv.writeheader()
         writer_csv.writerows(log_rows)
 
-    elapsed = time.time() - t0
 
 if __name__ == "__main__":
     main()

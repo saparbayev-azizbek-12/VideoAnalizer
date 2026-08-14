@@ -2,7 +2,6 @@ from __future__ import annotations
 import os
 import cv2
 import csv
-import sys
 import time
 import json
 import uuid
@@ -15,12 +14,9 @@ from typing import Optional
 from PIL import Image, ImageTk
 from tkinter import filedialog, messagebox, ttk
 
-from multi_object_detector import config
-from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter
-
-_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
-if _PKG_DIR not in sys.path:
-    sys.path.insert(0, os.path.dirname(_PKG_DIR))
+from multi_object_detector.core import config
+from multi_object_detector.detectors.frame_filter import StreamCorruptionFilter, is_frame_valid
+from multi_object_detector.detectors import fire_detector, ppe_detector, fall_detector
 
 BG = "#1a1a2e"
 BG2 = "#16213e"
@@ -67,10 +63,8 @@ def _analyze_frame_multi(
     _fall_pose=None,
     _fall_track_states=None,
 ) -> tuple[np.ndarray, list[dict]]:
-    from multi_object_detector.analysis.frame_filter import is_frame_valid
     if not is_frame_valid(frame):
         return frame, []
-    from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
     annotated = frame.copy()
     events = []
     ts = frame_idx / max(fps, 1.0)
@@ -134,7 +128,7 @@ def _analyze_frame_multi(
                 cv2.rectangle(annotated, (0, 0), (w_f, 42), (0, 0, 220), -1)
                 cv2.putText(annotated, "ALARM: FALL DETECTED (YIQILISH)", (20, 28),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
-        except Exception as _e:
+        except Exception:
             pass
 
     return annotated, events
@@ -468,7 +462,7 @@ class VideoAnalyzerApp(tk.Tk):
                         return
             except Exception as e:
                 self._ui_queue.put(("server_status", "🔴 Server Offline", RED))
-                self._ui_queue.put(("error_popup", f"Serverga ulanib bo'lmadi:\n{url}\n\nSabab: {e}\n\nServerni ishga tushirish: uv run python video_server.py"))
+                self._ui_queue.put(("error_popup", f"Serverga ulanib bo'lmadi:\n{url}\n\nSabab: {e}\n\nServerni ishga tushirish: uv run run_video_server.py"))
 
         threading.Thread(target=_check, daemon=True).start()
 
@@ -587,7 +581,7 @@ class VideoAnalyzerApp(tk.Tk):
                 self._active_job_id = job_id
 
         except Exception as e:
-            self._ui_queue.put(("error", f"Serverga ulanish xatosi:\n{e}\n\nServer ishlayaptimi (uv run python video_server.py)?"))
+            self._ui_queue.put(("error", f"Serverga ulanish xatosi:\n{e}\n\nServer ishlayaptimi (uv run run_video_server.py)?"))
             return
 
         self._ui_queue.put(("status", f"🌐 Serverda tahlil ketmoqda (Job: {job_id})…"))
@@ -653,8 +647,6 @@ class VideoAnalyzerApp(tk.Tk):
                 time.sleep(0.5)
 
     def _run_local_analysis(self):
-        from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
-
         self._ui_queue.put(("status", "💻 Modellar yuklanmoqda (Lokal)…"))
 
         fire_m = None
@@ -936,6 +928,10 @@ class VideoAnalyzerApp(tk.Tk):
         messagebox.showinfo("Muvaffaqiyat", f"JSON saqlandi:\n{dest}")
 
 
-if __name__ == "__main__":
+def main() -> None:
     app = VideoAnalyzerApp()
     app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

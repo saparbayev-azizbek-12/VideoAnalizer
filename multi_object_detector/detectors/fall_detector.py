@@ -12,8 +12,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Any
 
-from multi_object_detector import config
-from multi_object_detector.system_logger import sys_logger
+from multi_object_detector.core import config
+from multi_object_detector.core.system_logger import sys_logger
 
 
 KEYPOINT_NOSE = 0
@@ -41,8 +41,6 @@ SKELETON_CONNECTIONS = [
     (1, 3), (2, 4), (3, 5), (4, 6)
 ]
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-LOCAL_CALIB_PATH = str(BASE_DIR / "models" / "calib.npz")
 _UNDISTORT_CACHE: dict[tuple[int, int], Optional[tuple[np.ndarray, np.ndarray]]] = {}
 
 
@@ -51,8 +49,6 @@ def _get_calib_path(custom_path: Optional[str] = None) -> Optional[str]:
         return custom_path
     if hasattr(config, "CALIB_PATH") and os.path.exists(config.CALIB_PATH):
         return config.CALIB_PATH
-    if os.path.exists(LOCAL_CALIB_PATH):
-        return LOCAL_CALIB_PATH
     return None
 
 
@@ -66,22 +62,28 @@ def get_undistort_maps(frame_w: int, frame_h: int, calib_path: Optional[str] = N
         _UNDISTORT_CACHE[key] = None
         return None
 
-    data = np.load(path)
-    K = data["camera_matrix"].astype(np.float64).copy()
-    dist = data["dist_coeffs"].astype(np.float64)
-    calib_w, calib_h = data["image_size"]
+    try:
+        data = np.load(path)
+        K = data["camera_matrix"].astype(np.float64).copy()
+        dist = data["dist_coeffs"].astype(np.float64)
+        calib_w, calib_h = data["image_size"]
 
-    scale_x = frame_w / float(calib_w)
-    scale_y = frame_h / float(calib_h)
-    K[0, 0] *= scale_x
-    K[0, 2] *= scale_x
-    K[1, 1] *= scale_y
-    K[1, 2] *= scale_y
+        scale_x = frame_w / float(calib_w)
+        scale_y = frame_h / float(calib_h)
+        K[0, 0] *= scale_x
+        K[0, 2] *= scale_x
+        K[1, 1] *= scale_y
+        K[1, 2] *= scale_y
 
-    new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, (frame_w, frame_h), alpha=0)
-    map1, map2 = cv2.initUndistortRectifyMap(K, dist, None, new_K, (frame_w, frame_h), cv2.CV_16SC2)
-    _UNDISTORT_CACHE[key] = (map1, map2)
-    return _UNDISTORT_CACHE[key]
+        new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, (frame_w, frame_h), alpha=0)
+        map1, map2 = cv2.initUndistortRectifyMap(K, dist, None, new_K, (frame_w, frame_h), cv2.CV_16SC2)
+        _UNDISTORT_CACHE[key] = (map1, map2)
+        return _UNDISTORT_CACHE[key]
+    except Exception as e:
+        sys_logger.error("FallDetector", f"Kalibratsiya xatoligi: {e}", exc=e)
+        _UNDISTORT_CACHE[key] = None
+        return None
+
 
 def undistort_frame(frame: np.ndarray, calib_path: Optional[str] = None) -> np.ndarray:
     h, w = frame.shape[:2]
@@ -90,6 +92,7 @@ def undistort_frame(frame: np.ndarray, calib_path: Optional[str] = None) -> np.n
         return frame
     map1, map2 = maps
     return cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
+
 
 STANDING_ANGLE_DEG = 22.0
 LYING_ANGLE_DEG = 62.0
@@ -114,12 +117,14 @@ MIN_VISIBLE_LANDMARKS_RATIO = 1.0 - MAX_OCCLUSION_RATIO
 FALL_CONFIRM_FRAMES = 4
 STANDING_MIN_FRAMES = 10
 
+
 def is_valid_person_crop(bbox_w: int, bbox_h: int) -> bool:
     if max(bbox_w, bbox_h) < 35:
         return False
     if (bbox_w * bbox_h) < 600:
         return False
     return True
+
 
 def is_pose_reliable(scores: np.ndarray, threshold: float = 0.25) -> bool:
     if scores is None or len(scores) < 13:
@@ -130,7 +135,9 @@ def is_pose_reliable(scores: np.ndarray, threshold: float = 0.25) -> bool:
     hip_vis = max(float(scores[KEYPOINT_LEFT_HIP]), float(scores[KEYPOINT_RIGHT_HIP]))
     return sh_vis >= threshold and hip_vis >= threshold
 
+
 _PERSON_MODEL: Optional[Any] = None
+
 
 def get_model() -> Any:
     global _PERSON_MODEL
@@ -156,6 +163,7 @@ def calculate_angle(hip_center: tuple[float, float], shoulder_center: tuple[floa
     angle = math.atan2(dy, dx)
     return abs(90 - np.degrees(angle))
 
+
 def classify_posture(torso_angle: float,
                      standing_threshold: float = STANDING_ANGLE_DEG,
                      lying_threshold: float = LYING_ANGLE_DEG) -> str:
@@ -165,6 +173,7 @@ def classify_posture(torso_angle: float,
         return "Lying Down"
     else:
         return "Falling"
+
 
 def check_5frame_transition(posture_history: deque) -> bool:
     if len(posture_history) < 5:
@@ -179,11 +188,13 @@ def check_5frame_transition(posture_history: deque) -> bool:
     downward_sum = sum(r[2:])
     return (start_min < end_max) and (downward_sum >= 3)
 
+
 @dataclass
 class FallEvent:
     frame_index: int
     timestamp_sec: float
     track_id: int
+
 
 @dataclass
 class ProcessingResult:
@@ -194,6 +205,7 @@ class ProcessingResult:
     total_frames: int
     fall_detected: bool
     fall_events: list[FallEvent] = field(default_factory=list)
+
 
 @dataclass
 class TrackState:
@@ -209,7 +221,9 @@ class TrackState:
     confirm_count: int = 0
     standing_frames: int = 0
 
+
 ProgressCallback = Callable[[int, int], None]
+
 
 def _vertical_velocity(hip_history: deque, fps: int) -> float:
     if len(hip_history) < 2:
@@ -230,6 +244,7 @@ def _vertical_velocity(hip_history: deque, fps: int) -> float:
     dy_norm = abs(cur_y - ref_y) / cur_h
     return dy_norm / dt
 
+
 def _aspect_dropped(aspect_history: deque, fps: int) -> bool:
     if len(aspect_history) < 2:
         return False
@@ -243,47 +258,23 @@ def _aspect_dropped(aspect_history: deque, fps: int) -> bool:
         return False
     return cur_ratio < recent_max * ASPECT_DROP_RATIO
 
+
 KEYPOINT_COLORS = [
-    (0, 255, 255),
-    (255, 255, 0),
-    (255, 255, 0),
-    (255, 0, 255),
-    (255, 0, 255),
-    (0, 255, 0),
-    (0, 255, 0),
-    (0, 200, 255),
-    (255, 200, 0),
-    (0, 100, 255),
-    (255, 100, 0),
-    (0, 255, 128),
-    (0, 255, 128),
-    (0, 255, 255),
-    (255, 255, 0),
-    (0, 165, 255),
+    (0, 255, 255), (255, 255, 0), (255, 255, 0), (255, 0, 255),
+    (255, 0, 255), (0, 255, 0), (0, 255, 0), (0, 200, 255),
+    (255, 200, 0), (0, 100, 255), (255, 100, 0), (0, 255, 128),
+    (0, 255, 128), (0, 255, 255), (255, 255, 0), (0, 165, 255),
     (255, 165, 0),
 ]
 
 LIMB_COLORS = [
-    (0, 255, 255),
-    (0, 255, 255),
-    (255, 255, 0),
-    (255, 255, 0),
-    (0, 255, 0),
-    (0, 255, 0),
-    (0, 255, 0),
-    (0, 255, 0),
-    (0, 165, 255),
-    (255, 0, 255),
-    (0, 100, 255),
-    (255, 0, 128),
-    (255, 255, 0),
-    (255, 255, 0),
-    (255, 255, 0),
-    (255, 255, 0),
-    (255, 255, 0),
-    (255, 255, 0),
-    (255, 255, 0),
+    (0, 255, 255), (0, 255, 255), (255, 255, 0), (255, 255, 0),
+    (0, 255, 0), (0, 255, 0), (0, 255, 0), (0, 255, 0),
+    (0, 165, 255), (255, 0, 255), (0, 100, 255), (255, 0, 128),
+    (255, 255, 0), (255, 255, 0), (255, 255, 0), (255, 255, 0),
+    (255, 255, 0), (255, 255, 0), (255, 255, 0),
 ]
+
 
 def draw_person_detection(
     image: np.ndarray,
@@ -442,22 +433,6 @@ class RTMPoseEstimator:
         self._init_model()
 
     def _init_model(self):
-        project_root = Path(__file__).resolve().parent.parent.parent.parent
-        user_home = Path.home()
-        possible_rtmlib_paths = [
-            project_root / "rtmlib",
-            project_root.parent / "rtmlib",
-            user_home / "rtmlib",
-            user_home / "AppData" / "Roaming" / "Python" / "Python312" / "site-packages",
-            user_home / "AppData" / "Local" / "Programs" / "Python" / "Python312" / "Lib" / "site-packages",
-            Path("C:/Python312/Lib/site-packages"),
-            Path("C:/Users/ADMIN/AppData/Local/Programs/Python/Python312/Lib/site-packages"),
-            Path("C:/Users/ADMIN/AppData/Roaming/Python/Python312/site-packages"),
-        ]
-        for p in possible_rtmlib_paths:
-            if p.exists() and str(p) not in sys.path:
-                sys.path.insert(0, str(p))
-
         try:
             sys_logger.info("RTMPose", f"RTMPose initialized (mode={self.mode}, backend={self.backend}, device={self.device})")
             from rtmlib import Body, RTMPose
@@ -502,6 +477,7 @@ class RTMPoseEstimator:
             except Exception:
                 return np.empty((0, 17, 2)), np.empty((0, 17))
 
+
 def create_pose_instance(
     mode: Optional[str] = None,
     backend: Optional[str] = None,
@@ -513,6 +489,7 @@ def create_pose_instance(
     d = device or getattr(config, "RTMPOSE_DEVICE", "cpu")
     p = model_path or getattr(config, "RTMPOSE_MODEL_PATH", None)
     return RTMPoseEstimator(mode=m, backend=b, device=d, onnx_model=p)
+
 
 def process_video(
     input_path: str,
@@ -571,6 +548,7 @@ def process_video(
     cap.release()
     out.release()
     return ProcessingResult(output_path=output_path, fps=fps, width=width, height=height, total_frames=frame_idx, fall_detected=len(fall_events) > 0, fall_events=fall_events)
+
 
 def process_fall_frame(
     frame: np.ndarray,
@@ -777,6 +755,7 @@ def process_fall_frame(
 
     return frame, events, any_fall_this_frame
 
+
 def reencode_for_web(input_path: str, output_path: str) -> None:
     try:
         import imageio_ffmpeg
@@ -785,6 +764,7 @@ def reencode_for_web(input_path: str, output_path: str) -> None:
         ffmpeg_exe = "ffmpeg"
     cmd = [ffmpeg_exe, "-y", "-i", input_path, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output_path]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:

@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
-app = FastAPI(title="Camera Manual Remap Server")
+app = FastAPI(title="Camera Manual Calibration Server")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,12 +37,12 @@ class UpdateManualRequest(BaseModel):
 
 
 class SaveManualRequest(BaseModel):
-    save_path: str = "calib.npz"
+    save_path: str = "calibration/calib.npz"
 
 
 class StartTestRequest(BaseModel):
     source: str
-    calib_path: str = "calib.npz"
+    calib_path: str = "calibration/calib.npz"
     alpha: float = 1.0
 
 
@@ -54,7 +54,7 @@ class RemapManager:
         self.thread: Optional[threading.Thread] = None
 
         self.source = ""
-        self.calib_path = "calib.npz"
+        self.calib_path = "calibration/calib.npz"
 
         self.manual_k1 = -0.15
         self.manual_k2 = 0.02
@@ -96,7 +96,7 @@ class RemapManager:
             self.manual_k2 = k2
             self.manual_focal_scale = focal_scale
 
-    def save_manual_calibration(self, save_path: str = "calib.npz") -> dict:
+    def save_manual_calibration(self, save_path: str = "calibration/calib.npz") -> dict:
         with self.lock:
             w, h = self.image_size if self.image_size is not None else (1920, 1080)
             f = max(w, h) * self.manual_focal_scale
@@ -104,6 +104,7 @@ class RemapManager:
             camera_matrix = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64)
             dist_coeffs = np.array([self.manual_k1, self.manual_k2, 0.0, 0.0, 0.0], dtype=np.float64)
 
+            os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
             np.savez(
                 save_path,
                 camera_matrix=camera_matrix,
@@ -314,7 +315,7 @@ def stop():
 
 
 @app.get("/api/download_calib")
-def download_calib(filename: str = "calib.npz"):
+def download_calib(filename: str = "calibration/calib.npz"):
     if not os.path.exists(filename):
         raise HTTPException(status_code=404, detail="Kalibratsiya fayli topilmadi")
     return FileResponse(filename, media_type="application/octet-stream", filename=os.path.basename(filename))
@@ -343,4 +344,4 @@ def test_feed():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8002)

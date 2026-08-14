@@ -69,6 +69,7 @@ def cmd_capture(args: argparse.Namespace) -> None:
     cap.release()
     cv2.destroyAllWindows()
 
+
 def cmd_calibrate(args: argparse.Namespace) -> None:
     cols, rows = _parse_board(args.board)
     square = args.square
@@ -83,7 +84,7 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
     images = sorted(glob.glob(os.path.join(args.images, "*.png"))
                      + glob.glob(os.path.join(args.images, "*.jpg")))
     if not images:
-        sys.exit(1)
+        sys.exit("Rasmlar topilmadi.")
 
     subpix_criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
     image_size: tuple[int, int] | None = None
@@ -104,7 +105,7 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
         used += 1
 
     if used < 5:
-        sys.exit(1)
+        sys.exit("Kamida 5 ta sifatli rasm kerak.")
 
     ret, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
         objpoints, imgpoints, image_size, None, None
@@ -122,6 +123,8 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
              dist_coeffs=dist_coeffs,
              image_size=np.array(image_size),
              mean_error=mean_error)
+    print(f"Kalibratsiya saqlandi: {args.save} (xatolik: {mean_error:.4f})")
+
 
 def cmd_test(args: argparse.Namespace) -> None:
     data = np.load(args.calib)
@@ -150,7 +153,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         right = cv2.resize(undistorted, (int(undistorted.shape[1] * scale), h_disp))
         combined = np.hstack([left, right])
 
-        cv2.imshow("Asl (chap)  vs  To'g'irlangan (o'ng) - q=chiqish", combined)
+        cv2.imshow("Asl (chap) vs To'g'irlangan (o'ng) - q=chiqish", combined)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
@@ -159,7 +162,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Camera calibration", formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description="Kamera kalibratsiyasi vositasi", formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_cap = sub.add_parser("capture", help="Checkerboard suratlarni yig'ish")
@@ -178,8 +181,7 @@ def main() -> None:
     p_test = sub.add_parser("test", help="Natijani jonli oqimda tekshirish")
     p_test.add_argument("--source", required=True, help="RTSP URL yoki USB device index")
     p_test.add_argument("--calib", default="calib.npz", help="calibrate rejimidan chiqqan fayl")
-    p_test.add_argument("--alpha", type=float, default=1.0,
-                         help="0=qora chetlarni kesib tashla, 1=barcha pikselni saqla")
+    p_test.add_argument("--alpha", type=float, default=1.0, help="0=qora chetlarni kesib tashla, 1=barcha pikselni saqla")
     p_test.set_defaults(func=cmd_test)
 
     args = parser.parse_args()

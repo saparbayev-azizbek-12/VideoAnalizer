@@ -5,7 +5,7 @@ import socket
 import threading
 import urllib.parse
 from datetime import datetime
-from multi_object_detector import config
+from multi_object_detector.core import config
 
 _log_lock = threading.Lock()
 

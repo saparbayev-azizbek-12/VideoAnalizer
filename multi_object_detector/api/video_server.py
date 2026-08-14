@@ -14,13 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse, StreamingResponse
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 
-from multi_object_detector import config
-from multi_object_detector.analysis.frame_filter import StreamCorruptionFilter, is_frame_valid
-from multi_object_detector.analysis.detectors import fire_detector, ppe_detector, fall_detector
-
-_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
-if _PKG_DIR not in sys.path:
-    sys.path.insert(0, os.path.dirname(_PKG_DIR))
+from multi_object_detector.core import config
+from multi_object_detector.detectors import fire_detector, ppe_detector, fall_detector
+from multi_object_detector.detectors.frame_filter import StreamCorruptionFilter, is_frame_valid
 
 JOBS_DIR = os.path.join(config.BASE_DIR, "video_jobs")
 os.makedirs(JOBS_DIR, exist_ok=True)
@@ -132,7 +128,7 @@ def _ensure_models():
                 _fire_model = fire_detector.get_model()
                 _ppe_model = ppe_detector.get_model()
                 _fall_model = fall_detector.get_model()
-            except Exception as e:
+            except Exception:
                 pass
             _models_loaded = True
 
@@ -214,7 +210,7 @@ def _analyze_frame_server(
                 cv2.rectangle(annotated, (0, 0), (w_f, 42), (0, 0, 220), -1)
                 cv2.putText(annotated, "ALARM: FALL DETECTED (YIQILISH)", (20, 28),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
-        except Exception as _e:
+        except Exception:
             pass
 
     return annotated, events
@@ -551,4 +547,4 @@ def delete_job(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("video_server:app", host=VIDEO_SERVER_HOST, port=VIDEO_SERVER_PORT, reload=False)
+    uvicorn.run("multi_object_detector.api.video_server:app", host=VIDEO_SERVER_HOST, port=VIDEO_SERVER_PORT, reload=False)

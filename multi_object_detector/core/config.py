@@ -1,8 +1,9 @@
+from __future__ import annotations
 import os
 import sys
 from dotenv import load_dotenv
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PARENT_DIR = os.path.dirname(BASE_DIR)
 
 for env_path in [os.path.join(PARENT_DIR, ".env"), os.path.join(BASE_DIR, ".env")]:
@@ -10,16 +11,19 @@ for env_path in [os.path.join(PARENT_DIR, ".env"), os.path.join(BASE_DIR, ".env"
         load_dotenv(dotenv_path=env_path)
         break
 
-DETECTORS_DIR = os.path.join(BASE_DIR, "analysis", "detectors")
+DETECTORS_DIR = os.path.join(BASE_DIR, "detectors")
 if os.path.exists(DETECTORS_DIR) and DETECTORS_DIR not in sys.path:
     sys.path.insert(0, DETECTORS_DIR)
 
-VIT_FIRE_MODEL_DIR = os.path.join(BASE_DIR, "analysis", "models", "vit-fire-detection")
+MODELS_DIR = os.path.join(DETECTORS_DIR, "models")
+VIT_FIRE_MODEL_DIR = os.path.join(MODELS_DIR, "vit-fire-detection")
 VIT_FIRE_HF_REPO = "EdBianchi/vit-fire-detection"
-PERSON_MODEL_PATH = os.path.join(BASE_DIR, "analysis", "models", "yolov8l.pt")
+PERSON_MODEL_PATH = os.path.join(MODELS_DIR, "yolov8l.pt")
 PERSON_DETECTOR_MODEL = os.getenv("PERSON_DETECTOR_MODEL", "rfdetr_large")
 PERSON_CLASS_ID = 0
-PPE_MODEL_PATH = os.path.join(BASE_DIR, "analysis", "models", "sfchd_yolov8s.pt")
+PPE_MODEL_PATH = os.path.join(MODELS_DIR, "sfchd_yolov8s.pt")
+
+CALIB_PATH = os.path.join(BASE_DIR, "calibration", "calib.npz")
 
 VIT_FIRE_CONF_THRESHOLD = float(os.getenv("VIT_FIRE_CONF_THRESHOLD", "0.78"))
 VIT_SMOKE_CONF_THRESHOLD = float(os.getenv("VIT_SMOKE_CONF_THRESHOLD", "0.65"))
@@ -73,3 +77,4 @@ API_TIMEOUT = 8
 DATASET_DIR = os.path.join(BASE_DIR, "dataset")
 SNAPSHOT_COOLDOWN_SEC = float(os.getenv("SNAPSHOT_COOLDOWN_SEC", "2.0"))
 CAMERA_LOG_PATH = os.getenv("CAMERA_LOG_PATH", os.path.join(PARENT_DIR, "camera_stream_errors.log"))
+SYSTEM_LOG_PATH = os.getenv("SYSTEM_LOG_PATH", os.path.join(PARENT_DIR, "system_debug.log"))

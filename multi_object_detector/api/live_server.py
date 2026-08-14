@@ -11,10 +11,10 @@ from fastapi.responses import Response
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from multi_object_detector import config
-from multi_object_detector import camera_manager
-from multi_object_detector.analysis import models_manager
-from multi_object_detector.system_logger import sys_logger
+from multi_object_detector.core import config
+from multi_object_detector.streaming import camera_manager
+from multi_object_detector.core.system_logger import sys_logger
+from multi_object_detector.detectors import manager as models_manager
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|err_detect;explode"
 app = FastAPI(title="AI Video Monitoring Server")
@@ -304,4 +304,4 @@ async def get_stream_logs(limit: int = 100):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host=config.SERVER_HOST, port=config.SERVER_PORT, reload=False)
+    uvicorn.run("multi_object_detector.api.live_server:app", host=config.SERVER_HOST, port=config.SERVER_PORT, reload=False)

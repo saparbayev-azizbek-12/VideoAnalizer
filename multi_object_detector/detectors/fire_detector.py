@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import sys
 import cv2
 import subprocess
@@ -8,8 +9,7 @@ from collections import deque
 from typing import Callable, Optional
 from dataclasses import dataclass, field
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-VIT_MODEL_DIR = BASE_DIR / "analysis" / "models" / "vit-fire-detection"
+from multi_object_detector.core import config
 
 LABEL_FIRE = "Fire"
 LABEL_SMOKE = "Smoke"
@@ -19,14 +19,14 @@ _MIN_FIRE_PIXEL_RATIO = 0.004
 
 _vit_processor = None
 _vit_model = None
-HF_REPO = "EdBianchi/vit-fire-detection"
 
 
 def _get_model_source() -> str:
-    bin_file = VIT_MODEL_DIR / "pytorch_model.bin"
-    if VIT_MODEL_DIR.exists() and bin_file.exists() and bin_file.stat().st_size > 10_000_000:
-        return str(VIT_MODEL_DIR)
-    return HF_REPO
+    vit_dir = Path(config.VIT_FIRE_MODEL_DIR)
+    bin_file = vit_dir / "pytorch_model.bin"
+    if vit_dir.exists() and bin_file.exists() and bin_file.stat().st_size > 10_000_000:
+        return str(vit_dir)
+    return config.VIT_FIRE_HF_REPO
 
 
 def get_model():

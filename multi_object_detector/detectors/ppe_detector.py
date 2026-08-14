@@ -5,7 +5,7 @@ from typing import Optional
 from ultralytics import YOLO
 from dataclasses import dataclass
 
-from multi_object_detector import config
+from multi_object_detector.core import config
 
 CLASS_PERSON = "Person"
 CLASS_SAFETY_HELMET = "Safety Helmet"
